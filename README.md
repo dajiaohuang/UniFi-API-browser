@@ -12,8 +12,13 @@ Please keep the following in mind when using the UniFi API browser:
 
 - The tool does not support all available data collections and API endpoints. See the list below for those currently
   supported.
-- **Classic controllers**: versions 5.X.X, 6.X.X, 7.X.X, 8.X.X, and 9.X.X of the UniFi Controller/Networking Application
-  software are supported (version **9.4.19** has been confirmed to work)
+- **Classic controllers**: versions 5.X.X through 11.X.X of the UniFi Controller/Network Application software are
+  supported (version **11.0.89** has been confirmed to work)
+- **Network Application 11.x** moved all time-series statistics to a new statistics engine and removed several legacy
+  endpoints. On 11.x the legacy interval stats collections (5-minute/hourly/daily/monthly site, access point and gateway
+  stats, speedtest results) return empty results, and the dashboard metrics, events, alarms and IDS/IPS events
+  collections return an error. Use the "(11.x)" collections in the Stats menu and the system log collections in the
+  Messages menu instead; the "statistics source" collection shows which engine a controller uses (`LEGACY` or `MODERN`)
 - **Official API controllers**: requires a UniFi Network Application that supports API key authentication
 - Network Application on UniFi OS-based consoles and servers is also supported
 - When accessing UniFi OS-based controllers through this tool, please read the remarks regarding UniFi OS support
@@ -148,6 +153,16 @@ The UniFi API browser tool offers the following features:
   - monthly gateway stats
   - 5-minute dashboard metrics
   - hourly dashboard metrics
+  - speedtest results
+  - statistics source (`LEGACY`/`MODERN`, Network Application 10.x and higher)
+  - statistics schemas (Network Application 11.x)
+  - WAN stats, WAN stats per gateway (11.x)
+  - wireless site stats per radio band, per access point, per SSID and access point (11.x)
+  - client counts, wireless client counts per WLAN (11.x)
+  - client activity per client device (11.x)
+  - system stats per device (11.x)
+  - ISP metrics per WAN (11.x)
+  - aggregated dashboard (Network Application 10.x and higher)
   - site health metrics
   - port forward stats
   - DPI stats
@@ -160,7 +175,8 @@ The UniFi API browser tool offers the following features:
   - list alarms
   - count alarms
   - list IDS/IPS events
-  - list system log entries
+  - list system log entries (all, per category, device alerts, critical alerts, Next AI alerts, VPN alerts, admin
+    activity, update alerts, client alerts, threat alerts, triggers)
 
 Please note that the bundled API client supports many more API endpoints, not all make sense to add to the API browser
 though.

@@ -401,6 +401,104 @@ $collections = [
                 'params' => [],
             ],
             [
+                'type' => 'divider', // or collection
+            ],
+            /**
+             * Network Application 11.x statistics engine. The {site_uid} placeholder is replaced with the _id of the
+             * selected site by ajax/fetch_collection.php. These collections return an HTML 404 (JSON decode error)
+             * on Network Application 10.x and older, use "statistics source" to check which engine is in use.
+             */
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'statistics source (LEGACY/MODERN, 10.x and higher)',
+                'method' => 'get_stats_source',
+                'params' => [],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'statistics schemas (11.x)',
+                'method' => 'list_stat_schemas',
+                'params' => [],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'WAN stats, past 24 hours (11.x)',
+                'method' => 'stat_series',
+                'params' => ['wanBySite', 'DAY', null, null, "siteId.eq('{site_uid}')"],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'WAN stats per gateway, past 7 days (11.x)',
+                'method' => 'stat_series',
+                'params' => ['wanBySiteByDevice', 'WEEK', null, null, "siteId.eq('{site_uid}')", 'values(rxBytes,txBytes,avgLatencyMs,avgAvailabilityPct),nested(byNetworkGroup)'],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'wireless site stats per radio band, past 24 hours (11.x)',
+                'method' => 'stat_series',
+                'params' => ['wirelessBySite', 'DAY', null, null, "siteId.eq('{site_uid}')", 'values(distinctClientCount,rxClientBytes,txClientBytes),nested(byRadioBand)'],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'wireless stats per access point, past 24 hours (11.x)',
+                'method' => 'stat_series',
+                'params' => ['wirelessBySiteByDevice', 'DAY', null, null, "siteId.eq('{site_uid}')", 'values(distinctClientCount,rxClientBytes,txClientBytes,avgTotalCuPct)'],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'wireless stats per SSID and access point, past 24 hours (11.x)',
+                'method' => 'stat_series',
+                'params' => ['wirelessAnalyticsBySiteByDevice', 'DAY', null, null, "siteId.eq('{site_uid}')", 'nested(byVap(values(avgClientCount,rxBytes,txBytes)))'],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'client counts, past 7 days (11.x)',
+                'method' => 'stat_series',
+                'params' => ['clientCountBySite', 'WEEK', null, null, "siteId.eq('{site_uid}')"],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'wireless client counts per WLAN, past 7 days (11.x)',
+                'method' => 'stat_series',
+                'params' => ['wirelessClientCountBySite', 'WEEK', null, null, "siteId.eq('{site_uid}')", 'values(maxClientCount),nested(byWlan)'],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'client activity per client device, past 24 hours (11.x)',
+                'method' => 'stat_series',
+                'params' => ['activityBySiteByClient', 'DAY', null, null, "siteId.eq('{site_uid}')", 'values(durationMs,rxBytes,txBytes,avgSignalDbm,avgSatisfactionScore)'],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'system stats per device (CPU, memory, uptime), past 24 hours (11.x)',
+                'method' => 'stat_series',
+                'params' => ['systemBySiteByDevice', 'DAY', null, null, "siteId.eq('{site_uid}')"],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'ISP metrics per WAN, past 7 days (11.x)',
+                'method' => 'stat_series',
+                'params' => ['metricsBySiteByWanByIsp', 'WEEK', null, null, "siteId.eq('{site_uid}')"],
+            ],
+            [
+                'type' => 'divider', // or collection
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'aggregated dashboard, past 24 hours (10.x and higher)',
+                'method' => 'list_aggregated_dashboard',
+                'params' => [],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'aggregated dashboard, past hour (10.x and higher)',
+                'method' => 'list_aggregated_dashboard',
+                'params' => [3600],
+            ],
+            [
+                'type' => 'divider', // or collection
+            ],
+            [
                 'type'   => 'collection', // or divider
                 'label'  => 'site health metrics',
                 'method' => 'list_health',
@@ -490,6 +588,18 @@ $collections = [
             ],
             [
                 'type'   => 'collection', // or divider
+                'label'  => 'system log: all entries',
+                'method' => 'get_system_log',
+                'params' => ['all'],
+            ],
+            [
+                'type'   => 'collection', // or divider
+                'label'  => 'system log: client device entries',
+                'method' => 'get_system_log',
+                'params' => ['all', null, null, 0, 100, ['categories' => ['CLIENT_DEVICES']]],
+            ],
+            [
+                'type'   => 'collection', // or divider
                 'label'  => 'system log: device alerts',
                 'method' => 'get_system_log',
                 'params' => ['device-alert'],
@@ -532,7 +642,7 @@ $collections = [
             ],
             [
                 'type'   => 'collection', // or divider
-                'label'  => 'system log: triggers',
+                'label'  => 'system log: triggers (10.x and older)',
                 'method' => 'get_system_log',
                 'params' => ['triggers'],
             ],

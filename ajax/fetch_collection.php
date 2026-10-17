@@ -16,6 +16,7 @@ require_once '../collections.php';
 use Kint\Renderer\TextRenderer;
 use Kint\Renderer\RichRenderer;
 use UniFi_API\Client as ApiClient;
+use UniFi_API\Exceptions\ControllerErrorException;
 use UniFi_API\Exceptions\CurlExtensionNotLoadedException;
 use UniFi_API\Exceptions\CurlGeneralErrorException;
 use UniFi_API\Exceptions\CurlTimeoutException;
@@ -114,7 +115,11 @@ if (!empty($_SESSION['controller'])) {
     }
 
     if (!empty($_POST['selected_collection_params'])) {
-        $params = json_decode($_POST['selected_collection_params']);
+        /**
+         * Decode to arrays so that associative parameters (e.g. the $custom_payload of get_system_log()) arrive
+         * as PHP arrays rather than stdClass objects.
+         */
+        $params = json_decode($_POST['selected_collection_params'], true) ?? [];
     }
 
     if (!empty($_POST['selected_site_id'])) {
@@ -277,37 +282,44 @@ if (!empty($_SESSION['controller'])) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'cURL is not available in your PHP installation!';
-                return;
+                returnJson($results);
+                exit;
             } catch (CurlGeneralErrorException $e) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'We have encountered a general cURL error: ' . $e->getMessage();
-                return;
+                returnJson($results);
+                exit;
             } catch (CurlTimeoutException $e) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'UniFi controller connection timeout!';
-                return;
+                returnJson($results);
+                exit;
             } catch (InvalidBaseUrlException $e) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'UniFi controller login failure, base URL is invalid!';
-                return;
+                returnJson($results);
+                exit;
             } catch (InvalidSiteNameException $e) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'UniFi controller login failure, site name is invalid!';
-                return;
+                returnJson($results);
+                exit;
             } catch (LoginFailedException $e) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'UniFi controller login failure, please check your credentials in config/config.php!';
-                return;
+                returnJson($results);
+                exit;
             } catch (Exception $e) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'An Exception was thrown:' . $e->getMessage();
-                return;
+                returnJson($results);
+                exit;
             }
 
             /**
@@ -315,6 +327,13 @@ if (!empty($_SESSION['controller'])) {
              */
             $time_1           = microtime(true);
             $time_after_login = $time_1 - $time_start;
+
+            /**
+             * The Network Application 11.x statistics engine (stat_series()) keys on the site _id, a UUID, rather
+             * than on the short site name. Collections can use the {site_uid} placeholder in string parameters;
+             * it is replaced here with the _id of the selected site, as collected by fetch_sites.php.
+             */
+            $params = substituteSiteUid($params, $site_id, $unifi_connection);
 
             /**
              * We then determine which method is required and which parameters to pass.
@@ -332,22 +351,42 @@ if (!empty($_SESSION['controller'])) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'JSON decode error!';
-                return;
+
+                /**
+                 * The Network Application 11.x statistics engine endpoints do not exist on older versions, which
+                 * answer with an HTML page instead of JSON.
+                 */
+                if (in_array($method, ['stat_series', 'list_stat_schemas', 'get_stats_source'], true)) {
+                    $results['message'] = 'This collection requires Network Application 11.x (10.x for the statistics source), the controller does not have this endpoint.';
+                }
+
+                returnJson($results);
+                exit;
             } catch (LoginRequiredException $e) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'Login is required for this endpoint';
-                return;
+                returnJson($results);
+                exit;
             } catch (LoginFailedException $e) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'UniFi controller login failure, please check your credentials in config/config.php!';
-                return;
+                returnJson($results);
+                exit;
+            } catch (ControllerErrorException $e) {
+                error_log(get_class($e) . ': ' . $e->getMessage());
+                $results['state']   = 'error';
+                $results['message'] = 'The controller returned an error: ' . $e->getApiErrorCode()
+                    . '. Network Application 11.x removed several legacy endpoints (dashboard metrics, events, alarms, IDS/IPS events, controller update check), see the README.';
+                returnJson($results);
+                exit;
             } catch (Exception $e) {
                 error_log(get_class($e) . ': ' . $e->getMessage());
                 $results['state']   = 'error';
                 $results['message'] = 'An Exception was thrown:' . $e->getMessage();
-                return;
+                returnJson($results);
+                exit;
             }
 
             if (!empty($request_results)) {

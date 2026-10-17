@@ -1,6 +1,6 @@
 ## UniFi Controller API client class
 
-[![License](https://img.shields.io/github/license/Art-of-WiFi/UniFi-API-client)](https://github.com/Art-of-WiFi/UniFi-API-client/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/Art-of-WiFi/UniFi-API-client)](https://github.com/Art-of-WiFi/UniFi-API-client/blob/main/LICENSE.md)
 [![Packagist Version](https://img.shields.io/packagist/v/art-of-wifi/unifi-api-client)](https://packagist.org/packages/art-of-wifi/unifi-api-client)
 [![Downloads](https://img.shields.io/packagist/dt/art-of-wifi/unifi-api-client)](https://packagist.org/packages/art-of-wifi/unifi-api-client)
 [![PHP Version](https://img.shields.io/packagist/php-v/art-of-wifi/unifi-api-client)](https://packagist.org/packages/art-of-wifi/unifi-api-client)
@@ -12,13 +12,39 @@ This class is used by our API Browser tool, which can be found
 
 The package can be installed manually or by using
 composer/[packagist](https://packagist.org/packages/art-of-wifi/unifi-api-client) for
-easy inclusion in your projects. See the [installation instructions](#Installation) below for more details.
+easy inclusion in your projects. See the [installation instructions](#installation) below for more details.
+
+## Contents
+
+- [Why use this API client?](#why-use-this-api-client)
+- [Supported Versions](#supported-versions)
+  - [Network Application 11.x](#network-application-11x)
+- [Requirements](#requirements)
+- [UniFi OS Support](#unifi-os-support)
+  - [Remote API access to UniFi OS-based gateways](#remote-api-access-to-unifi-os-based-gateways)
+- [Upgrading from previous versions](#upgrading-from-previous-versions)
+- [Installation](#installation)
+- [Authentication](#authentication)
+  - [Option 1: API Key (recommended for UniFi OS)](#option-1-api-key-recommended-for-unifi-os)
+  - [Option 2: Username/Password](#option-2-usernamepassword)
+  - [Option 3: Site Manager Proxy](#option-3-site-manager-proxy)
+  - [When to use which method?](#when-to-use-which-method)
+  - [Migrating from username/password to API keys](#migrating-from-usernamepassword-to-api-keys)
+  - [Code Examples](#code-examples)
+- [Exception handling](#exception-handling)
+- [Functions/methods supported](#functionsmethods-supported)
+- [Need help or have suggestions?](#need-help-or-have-suggestions)
+- [Looking for version 1.x.x?](#looking-for-version-1xx)
+- [Credits](#credits)
+- [Contributors](#contributors)
+- [About Art of WiFi](#about-art-of-wifi)
+- [Important Disclaimer](#important-disclaimer)
 
 
 ## Why use this API client?
 
 - Easy to use: clear docs, comprehensive method coverage, and helpful examples.
-- Broad coverage: exposes many UniFi endpoints not available in the official APIs.
+- Broad coverage: exposes many UniFi endpoints not (yet) available in the official APIs.
 - Composer-friendly: installable via [Composer](https://getcomposer.org) and works with modern PHP projects.
 - Lightweight and dependency-free: no external libraries required; uses cURL.
 - Secure: communicates over TLS and supports optional SSL certificate validation.
@@ -29,24 +55,51 @@ easy inclusion in your projects. See the [installation instructions](#Installati
 
 ## Supported Versions
 
-| Software                             | Versions                                                  |
-|--------------------------------------|-----------------------------------------------------------|
-| UniFi Network Application/controller | 5.x, 6.x, 7.x, 8.x, 9.x, 10.x (**10.0.154 is confirmed**) |
-| UniFi OS                             | 3.x, 4.x, 5.x (**5.0.5 is confirmed**)                    |
+| Software                             | Versions                                                 |
+|--------------------------------------|----------------------------------------------------------|
+| UniFi Network Application/controller | 5.x, 6.x, 7.x, 8.x, 9.x, 10.x, 11.x (**11.0.89 is confirmed**) |
+| UniFi OS                             | 3.x, 4.x, 5.x, 6.x (**6.0.13 is confirmed**)             |
+
+### Network Application 11.x
+
+Network Application 11.0 (UniFi OS 6.0+ only, no longer available for the self-hosted Network Server) moved all
+time-series statistics to a new statistics engine and dropped several legacy endpoints. Existing methods keep
+working as before on 10.x and older, but on 11.x:
+
+- the interval report methods (`stat_5minutes_site()` … `stat_monthly_gateway()`, `stat_speedtest_results()`)
+  always return an empty array; use the new `stat_series()` method instead, with `list_stat_schemas()` for the
+  available schemas and `get_stats_source()` to detect which engine a controller uses (`LEGACY` or `MODERN`)
+- `list_dashboard()`, `list_events()`, `stat_ips_events()`, `list_alarms()`, `count_alarms()` and
+  `check_controller_update()` throw a `ControllerErrorException` because the endpoints were removed; use
+  `list_aggregated_dashboard()` and `get_system_log()` (classes `all`, `threat-alert`, `critical`) instead
+- sessions, guests, authorizations, vouchers, devices, clients, health and all configuration endpoints are
+  unaffected
+
+The new methods are documented in the [API Reference](API_REFERENCE.md#statistics). Statistics history is not
+migrated by the controller: the new store starts at the moment of the 11.x upgrade.
 
 
 ## Requirements
 
 - a server or desktop with:
-  - PHP **7.4.0** or higher (use version [1.1.83](https://github.com/Art-of-WiFi/UniFi-API-client/releases/tag/v1.1.83) 
+  - PHP **7.4.0** or higher (use version [1.1.83](https://github.com/Art-of-WiFi/UniFi-API-client/releases/tag/v1.1.83)
     for PHP 7.3.x and lower)
   - PHP cURL (`php-curl`) module enabled
-  - direct network connectivity between this server/desktop and the host and port where the UniFi Network Application is
-    running (usually TCP port 8443, port 11443 for UniFi OS Server, or port 443 for UniFi OS consoles)
-- you **must** use an admin **account with local access permissions** to access the API through this class as explained
-  here:  
-  https://artofwifi.net/blog/use-local-admin-account-unifi-api-captive-portal
-- do **not** use UniFi Cloud accounts and do not enable MFA/2FA for the accounts that you use with this class
+  - PHP JSON (`php-json`) module enabled (always available on PHP 8.0 and later, but it can be
+    disabled at compile time on PHP 7.4)
+  - network connectivity to the UniFi Network Application, either:
+    - **direct**, between this server/desktop and the host and port where the UniFi Network Application is
+      running (usually TCP port 8443, port 11443 for UniFi OS Server, or port 443 for UniFi OS consoles), or
+    - **through the Site Manager proxy** at unifi.ui.com, which only requires outbound HTTPS (TCP port 443) from
+      this server/desktop to the internet; the console itself must be online and connected to UI.com
+      (see [Option 3: Site Manager Proxy](#option-3-site-manager-proxy) below)
+- **authentication** — you need one of the following:
+  - an admin **account with local access permissions** as explained
+    here: https://artofwifi.net/blog/use-local-admin-account-unifi-api-captive-portal
+    Do **not** use UniFi Cloud accounts and do not enable MFA/2FA for these accounts.
+    (see [Option 2: Username/Password](#option-2-usernamepassword) below)
+  - **or** an **API key** generated in your UniFi OS console or UniFi OS Server (see [Option 1: API Key](#option-1-api-key-recommended-for-unifi-os) below)
+  - **or** a **Site Manager API key** for routing requests through the Ubiquiti cloud proxy (see [Option 3: Site Manager Proxy](#option-3-site-manager-proxy) below)
 
 
 ## UniFi OS Support
@@ -67,10 +120,11 @@ applications/devices/services have been verified to work:
 - Official UniFi Hosting, details [here](https://help.ui.com/hc/en-us/articles/4415364143511)
 - HostiFi UniFi Cloud Hosting, details [here](https://hostifi.com/unifi)
 
-The class automatically detects UniFi OS consoles/servers and adjusts URLs and several functions/methods accordingly.
+The API Client automatically detects UniFi OS consoles/servers and adjusts URLs and several functions/methods
+accordingly.
 
-UniFi OS-based consoles require you to connect using port **443** while **8443** which is used for
-the self-hosted/software-based controllers. When connecting to **UniFi OS Server**, you are required to use port
+UniFi OS-based consoles require you to connect using port **443**, whereas port **8443** is used for the
+self-hosted/software-based controllers. When connecting to **UniFi OS Server**, you are required to use port
 **11443**.
 
 
@@ -86,11 +140,21 @@ https://artofwifi.net/blog/how-to-access-the-unifi-controller-by-wan-ip-or-hostn
 
 ## Upgrading from previous versions
 
+When upgrading to **2.3.0** or later, please note:
+- errors returned by the controller (e.g. `api.err.NoSiteContext`) are now thrown as
+  `UniFi_API\Exceptions\ControllerErrorException` instead of a plain `\Exception`. Code that catches `\Exception`
+  keeps working, but code that catches `UnifiApiException` first and relies on controller errors falling through to a
+  later `catch (\Exception $e)` block will now see them in the `UnifiApiException` block
+- `set_api_key()`, `enable_site_manager_proxy()`, `connect_via_site_manager()` and `create_dns_record()` now throw
+  `UniFi_API\Exceptions\InvalidArgumentException`, which extends PHP's `\InvalidArgumentException`, so existing
+  `catch (\InvalidArgumentException $e)` blocks continue to work
+- see the [Exception handling](#exception-handling) section for details
+
 When upgrading from a version before **2.0.0**, please:
-- change your code to use the new Exceptions that are thrown by the class
+- change your code to use the new Exceptions that are thrown by the API Client class
 - test the client with your code for any breaking changes
-- make sure you are using [Composer](#composer) to install the class because the code is no longer held within a single
-  file
+- make sure you are using [Composer](#composer) to install the API Client because the code is no longer held within a
+  single file
 - see the note [here](#looking-for-version-1xx) regarding the single file version (1.x.x) of the API client
 
 
@@ -125,24 +189,166 @@ Finally, be sure to include the composer autoloader in your code if your framewo
 require_once 'vendor/autoload.php';
 ```
 
-## Example usage
+## Authentication
 
-A quick and basic example of how to use the class:
+The API client supports three authentication methods. Choose the one that fits your setup.
+
+### Option 1: API Key (recommended for UniFi OS)
+
+API key authentication is **stateless** — no login/logout flow is needed. This is the simplest way to
+get started with UniFi OS-based controllers.
 
 ```php
-/**
- * load the class using the composer autoloader
- */
 require_once 'vendor/autoload.php';
 
-/**
- * initialize the UniFi API connection class, log in to the controller and request the alarms collection
- * (this example assumes you have already assigned the correct values to the variables used)
- */
-$unifi_connection = new UniFi_API\Client($controller_user, $controller_password, $controller_url, $site_id, $controller_version, true);
-$login            = $unifi_connection->login();
-$results          = $unifi_connection->list_alarms(); // returns a PHP array containing alarm objects
+$unifi_connection = new UniFi_API\Client('', '', 'https://unifi:443', 'default');
+$unifi_connection->set_api_key('your-api-key-here');
+$results = $unifi_connection->list_alarms(); // no login() needed
 ```
+
+**How to generate an API key:**
+1. Open your UniFi OS console in a browser
+2. Navigate to **Integrations** in the sidebar menu
+3. Click **Create New API Key**
+4. Copy the generated key — it will not be shown again
+
+The API key inherits the permissions from the admin user that created it.
+
+**Key points:**
+- API keys are only available on **UniFi OS-based** consoles (UDM, UDR, UCG, UX, UDW, UCG-Ultra,
+  UniFi OS Server, etc.)
+- No `login()` or `logout()` calls are needed (calling them is harmless and will be ignored)
+- The client automatically configures itself for UniFi OS when an API key is set
+
+
+### Option 2: Username/Password
+
+The traditional authentication method that works with both self-hosted controllers and UniFi OS consoles.
+
+```php
+require_once 'vendor/autoload.php';
+
+$unifi_connection = new UniFi_API\Client(
+    $controller_user,
+    $controller_password,
+    $controller_url,
+    $site_id
+);
+
+$login   = $unifi_connection->login();
+$results = $unifi_connection->list_alarms();
+```
+
+**Requirements for username/password authentication:**
+- You **must** use a local admin account with **local access permissions** as explained
+  here: https://artofwifi.net/blog/use-local-admin-account-unifi-api-captive-portal
+- Do **not** use UniFi Cloud accounts
+- Do **not** enable MFA/2FA on accounts used with this client
+
+
+### Option 3: Site Manager Proxy
+
+If your console is managed through [unifi.ui.com](https://unifi.ui.com) and you don't have a direct
+network path to it, you can route API requests through the **Ubiquiti Site Manager cloud proxy**. This
+uses the [Site Manager API](https://developer.ui.com) connector to reach the console via UI.com's cloud
+infrastructure.
+
+```php
+require_once 'vendor/autoload.php';
+
+$client = UniFi_API\Client::connect_via_site_manager(
+    '245A4CA234150000000005F23204000000000638FE970000000061156371:48913759', // console ID
+    'your-site-manager-api-key',                                              // Site Manager API key
+    'default'                                                                  // site (optional)
+);
+
+// No login() needed — proxy mode is stateless
+$stats = $client->stat_daily_site();
+```
+
+**Finding the console ID:**
+The console ID (host ID) is visible in the URL when managing a console via `unifi.ui.com`:
+```
+https://unifi.ui.com/consoles/{console_id}/network/default/dashboard
+```
+
+**Site Manager API key:**
+Generate a Site Manager API key at https://unifi.ui.com under your account settings.
+This is **not** the same as a local controller API key generated in the UniFi OS console.
+
+**Requirements:**
+- Console firmware version must be >= 5.0.3
+- Console must be online and connected to UI.com
+- For non-organization API keys: limited to the API key owner's consoles only
+- For organization API keys: can access any console within the organization
+
+**You can also enable/disable proxy mode on an existing client instance:**
+
+```php
+$client = new UniFi_API\Client('', '', 'https://127.0.0.1', 'default');
+$client->enable_site_manager_proxy($console_id, $site_manager_api_key);
+
+// ... make API calls through the proxy ...
+
+$client->disable_site_manager_proxy();
+// Client must be re-configured (login, set_api_key, etc.) before making direct calls
+```
+
+**SSL verification:**
+In proxy mode, all requests go to `api.ui.com` which has a valid public CA certificate. SSL peer and host
+verification is automatically enforced.
+
+**Performance note:**
+Proxied requests add ~800ms of latency compared to direct access due to the cloud hop. Use direct
+access when available. The proxy is best suited for remote/headless deployments where a direct network
+path does not exist.
+
+**Rate limits:**
+The Site Manager API enforces rate limits (10,000 requests/minute for v1 stable). When exceeded,
+the API returns HTTP 429 with a `Retry-After` header.
+
+
+### When to use which method?
+
+| Scenario                                              | Method |
+|-------------------------------------------------------|---|
+| Controller is part of a **UniFi Fabric**              | API key (**required**) |
+| UniFi OS console (UDM, UDR, UCG, etc.)                | API key (recommended) or username/password |
+| UniFi OS Server                                       | API key (recommended) or username/password |
+| Self-hosted Network Application (non-UniFi OS Server) | Username/password (API keys are not supported) |
+| Remote console via UI.com (no direct network path)    | Site Manager proxy |
+
+> **Important:** When your controller is a member of a **UniFi Fabric**, username/password authentication
+> is **not available**. You **must** use API key authentication. UniFi Fabric uses centralized identity
+> management which does not support local login sessions through the API.
+
+
+### Migrating from username/password to API keys
+
+If you have existing code using username/password authentication and want to switch to API keys,
+the changes are minimal:
+
+**Before (username/password):**
+```php
+$unifi_connection = new UniFi_API\Client($user, $password, $url, $site_id);
+$unifi_connection->login();
+$results = $unifi_connection->list_alarms();
+$unifi_connection->logout();
+```
+
+**After (API key):**
+```php
+$unifi_connection = new UniFi_API\Client('', '', $url, $site_id);
+$unifi_connection->set_api_key($api_key);
+$results = $unifi_connection->list_alarms();
+```
+
+**What changes:**
+1. Pass empty strings for the `$user` and `$password` constructor parameters
+2. Call `set_api_key()` instead of `login()`
+3. Remove `logout()` calls (or leave them — they will be silently ignored)
+4. In your exception handling, `LoginFailedException` and `LoginRequiredException` will no longer occur;
+   you can keep or remove those catch blocks as you prefer
 
 
 #### IMPORTANT NOTES:
@@ -171,11 +377,34 @@ More code examples are available in the [`examples/`](examples/) directory.
 
 ## Exception handling
 
-The class now throws **Exceptions** for various error conditions instead of using PHP's `trigger_error()` function. This
-allows for more granular error handling in your application code.
+The API Client class throws **Exceptions** for various error conditions instead of using PHP's `trigger_error()`
+function. This allows for more granular error handling in your application code.
 
-You can also choose to catch the `UniFi_API\Exceptions\UnifiApiException` Exception to catch all Exceptions that
-might be thrown by the API Client class.
+All Exceptions thrown by the API Client class implement the `UniFi_API\Exceptions\UnifiApiExceptionInterface`
+interface, and all but one extend the `UniFi_API\Exceptions\UnifiApiException` base class. Catch the interface (or the
+base class) when you want to handle all client errors uniformly.
+
+The following Exceptions can be thrown:
+
+| Exception                         | Thrown when                                                                                                      |
+|-----------------------------------|------------------------------------------------------------------------------------------------------------------|
+| `ControllerErrorException`        | the controller returns an error in its response, e.g. `api.err.Invalid`; see `getApiErrorCode()`/`getResponse()` |
+| `ConsoleOfflineException`         | the console is offline when using the Site Manager proxy (HTTP 408)                                              |
+| `CurlExtensionNotLoadedException` | the PHP cURL extension is not loaded                                                                             |
+| `CurlGeneralErrorException`       | cURL reports an error; see `getHttpResponseCode()`/`getCurlGetinfoResults()`                                     |
+| `CurlTimeoutException`            | the cURL request timed out                                                                                       |
+| `EmailInvalidException`           | an invalid email address is passed to a method                                                                   |
+| `InvalidArgumentException`        | an invalid argument is passed to a method (extends PHP's `\InvalidArgumentException`, not `UnifiApiException`)   |
+| `InvalidBaseUrlException`         | the base URL passed to the constructor is invalid                                                                |
+| `InvalidCurlMethodException`      | an unsupported HTTP method is passed to `set_curl_method()`                                                      |
+| `InvalidSiteNameException`        | the site name is invalid                                                                                         |
+| `JsonDecodeException`             | the controller response could not be decoded as JSON                                                             |
+| `LoginFailedException`            | login failed; see `getHttpResponseCode()`                                                                        |
+| `LoginRequiredException`          | a method that requires login is called before `login()`                                                          |
+| `MacAddressEmptyException`        | an empty MAC address is passed to a method                                                                       |
+| `MacAddressInvalidException`      | an invalid MAC address is passed to a method                                                                     |
+| `MethodDeprecatedException`       | a deprecated method is called                                                                                    |
+| `NotAUnifiOsConsoleException`     | a UniFi OS-only method is called against a classic controller                                                    |
 
 Here is an example of how to catch each of the Exceptions individually:
 ```php
@@ -183,6 +412,8 @@ Here is an example of how to catch each of the Exceptions individually:
 /**
  * PHP API usage example with Exception handling
  */
+use UniFi_API\Exceptions\ConsoleOfflineException;
+use UniFi_API\Exceptions\ControllerErrorException;
 use UniFi_API\Exceptions\CurlExtensionNotLoadedException;
 use UniFi_API\Exceptions\CurlGeneralErrorException;
 use UniFi_API\Exceptions\CurlTimeoutException;
@@ -191,6 +422,7 @@ use UniFi_API\Exceptions\InvalidSiteNameException;
 use UniFi_API\Exceptions\JsonDecodeException;
 use UniFi_API\Exceptions\LoginFailedException;
 use UniFi_API\Exceptions\LoginRequiredException;
+use UniFi_API\Exceptions\UnifiApiExceptionInterface;
 
 /**
  * load the class using the composer autoloader
@@ -220,24 +452,29 @@ try {
     echo 'JsonDecodeException: ' . $e->getMessage(). PHP_EOL;
 } catch (LoginRequiredException $e) {
     echo 'LoginRequiredException: ' . $e->getMessage(). PHP_EOL;
+} catch (ConsoleOfflineException $e) {
+    echo 'ConsoleOfflineException: ' . $e->getMessage(). PHP_EOL;
 } catch (CurlGeneralErrorException $e) {
     echo 'CurlGeneralErrorException: ' . $e->getMessage(). PHP_EOL;
 } catch (CurlTimeoutException $e) {
     echo 'CurlTimeoutException: ' . $e->getMessage(). PHP_EOL;
 } catch (LoginFailedException $e) {
     echo 'LoginFailedException: ' . $e->getMessage(). PHP_EOL;
+} catch (ControllerErrorException $e) {
+    echo 'ControllerErrorException: ' . $e->getMessage() . ' (' . $e->getApiErrorCode() . ')' . PHP_EOL;
+} catch (UnifiApiExceptionInterface $e) {
+    /** catch any other Exceptions thrown by the API client */
+    echo 'UniFi API client Exception: ' . $e->getMessage(). PHP_EOL;
 } catch (Exception $e) {
     /** catch any other Exceptions that might be thrown */
     echo 'General Exception: ' . $e->getMessage(). PHP_EOL;
 }
 ```
 
-Although the PHP DocBlocks for most public methods/functions contain `@throws Exception`, it is recommended to catch
-specific Exceptions that can be thrown by the API Client class to provide more detailed error messages to your
-application code.
-
-In most cases, the class will let Exceptions bubble up to the calling code, but in some cases it will catch them and
-throw a new Exception with a more specific message.
+The PHP DocBlocks for most public methods contain `@throws UnifiApiException`, which covers the Exceptions that the
+internal request helper can raise (`LoginRequiredException`, `ControllerErrorException`, `JsonDecodeException`, the
+cURL Exceptions and `LoginFailedException`). It is recommended to catch specific Exceptions where your application
+needs to respond differently to them.
 
 The `list_alarms.php` example in the `examples/` directory is a good starting point to see how you can implement
 Exception handling.
@@ -245,8 +482,8 @@ Exception handling.
 
 ## Functions/methods supported
 
-The class currently supports a large and growing number of functions/methods to access the UniFi Controller API. 
-Please refer to the comments/PHP DocBlocks in the source code for more details on each of the functions/methods,
+The API Client class currently supports a large and growing number of functions/methods to access the UniFi Controller
+API. Please refer to the comments/PHP DocBlocks in the source code for more details on each of the functions/methods,
 their purpose, and their respective parameters.
 
 If you are using an advanced IDE such as PHPStorm or VS Code, you can use its code completion and other
@@ -259,7 +496,7 @@ For a quick overview of the available functions/methods, you can also check the 
 ## Need help or have suggestions?
 
 There is still work to be done to add functionality and further improve the usability of
-this class, so all suggestions/comments are welcome. Please use the GitHub
+this API Client class, so all suggestions/comments are welcome. Please use the GitHub
 [Issues section](https://github.com/Art-of-WiFi/UniFi-API-client/issues) or the Ubiquiti
 Community forums (https://community.ui.com/questions/PHP-client-class-to-access-the-UniFi-controller-API-updates-and-discussion-part-2/a793904e-6023-4a7f-bcae-340db2a03fc1)
 to share your suggestions and questions.
@@ -295,14 +532,14 @@ Whenever necessary, we will make sure to update the **version_1** branch with th
 
 ## Credits
 
-This class is based on the initial work by the following developers:
+This API Client class is based on the initial work by the following developers:
 
 - domwo: https://community.ui.com/questions/little-php-class-for-unifi-api/933d3fb3-b401-4499-993a-f9af079a4a3a
 - fbagnol: https://github.com/fbagnol/class.unifi.php
 
 and the API as published by Ubiquiti:
 
-- https://dl.ui.com/unifi/8.6.9/unifi_sh_api
+- https://dl.ui.com/unifi/9.5.21/unifi_sh_api
 
 ## Contributors
 
@@ -320,7 +557,7 @@ Art of WiFi develops software and tools that enhance the capabilities of UniFi n
 reporting solutions to device search utilities, our goal is to make UniFi deployments more powerful and easier to
 manage.
 
-If you're looking for a specific solution or just want to see what else we offer, feel free to explore our web site:
+If you're looking for a specific solution or just want to see what else we offer, feel free to explore our website:
 - https://www.artofwifi.net
 
 

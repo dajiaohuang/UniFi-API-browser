@@ -56,6 +56,59 @@ function getOfficialClientVersion(): string
 }
 
 /**
+ * Replace the {site_uid} placeholder in string parameters with the _id (UUID) of the selected site.
+ *
+ * The Network Application 11.x statistics engine (stat_series()) filters on the site _id rather than on the short
+ * site name. fetch_sites.php stores the name => _id map in the session; when the map is missing (e.g. an older
+ * session) the _id is looked up through list_sites(). When it still cannot be resolved, the parameter is dropped
+ * (null) so that the request succeeds without a site filter.
+ *
+ * @param array $params parameters as defined in the collection
+ * @param string $site_id short name of the selected site
+ * @param ApiClient $unifi_connection logged-in classic API client instance
+ * @return array parameters with the placeholder substituted
+ */
+function substituteSiteUid(array $params, string $site_id, ApiClient $unifi_connection): array
+{
+    $needs_uid = false;
+
+    foreach ($params as $param) {
+        if (is_string($param) && str_contains($param, '{site_uid}')) {
+            $needs_uid = true;
+            break;
+        }
+    }
+
+    if (!$needs_uid) {
+        return $params;
+    }
+
+    $site_uid = $_SESSION['site_uids'][$site_id] ?? '';
+
+    if ($site_uid === '') {
+        try {
+            foreach ($unifi_connection->list_sites() as $site) {
+                if (($site->name ?? '') === $site_id && !empty($site->_id)) {
+                    $site_uid = $site->_id;
+                    $_SESSION['site_uids'][$site_id] = $site_uid;
+                    break;
+                }
+            }
+        } catch (Exception $e) {
+            error_log('unable to resolve the site _id: ' . $e->getMessage());
+        }
+    }
+
+    foreach ($params as $key => $param) {
+        if (is_string($param) && str_contains($param, '{site_uid}')) {
+            $params[$key] = $site_uid !== '' ? str_replace('{site_uid}', $site_uid, $param) : null;
+        }
+    }
+
+    return $params;
+}
+
+/**
  * Output the results with correct JSON formatting.
  *
  * @param $results

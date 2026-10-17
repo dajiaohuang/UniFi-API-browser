@@ -4,20 +4,20 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "647e41311c741dfa416ab9bf408ee71a",
+    "content-hash": "51edfd680e89e47e02b67a20381c63ec",
     "packages": [
         {
             "name": "art-of-wifi/unifi-api-client",
-            "version": "v2.0.11",
+            "version": "v2.4.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/Art-of-WiFi/UniFi-API-client.git",
-                "reference": "6f8d90b4f000b1ef8ee3aa2815ebf06bf42bf1ad"
+                "reference": "e1f7f63b541bbbb28fe51342d2349092d30fb82a"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/Art-of-WiFi/UniFi-API-client/zipball/6f8d90b4f000b1ef8ee3aa2815ebf06bf42bf1ad",
-                "reference": "6f8d90b4f000b1ef8ee3aa2815ebf06bf42bf1ad",
+                "url": "https://api.github.com/repos/Art-of-WiFi/UniFi-API-client/zipball/e1f7f63b541bbbb28fe51342d2349092d30fb82a",
+                "reference": "e1f7f63b541bbbb28fe51342d2349092d30fb82a",
                 "shasum": ""
             },
             "require": {
@@ -38,7 +38,7 @@
             "authors": [
                 {
                     "name": "Art of WiFi",
-                    "email": "info@artofowifi.net",
+                    "email": "info@artofwifi.net",
                     "homepage": "https://artofwifi.net"
                 }
             ],
@@ -55,9 +55,9 @@
             ],
             "support": {
                 "issues": "https://github.com/Art-of-WiFi/UniFi-API-client/issues",
-                "source": "https://github.com/Art-of-WiFi/UniFi-API-client/tree/v2.0.11"
+                "source": "https://github.com/Art-of-WiFi/UniFi-API-client/tree/v2.4.0"
             },
-            "time": "2025-12-23T13:15:27+00:00"
+            "time": "2026-10-17T12:24:27+00:00"
         },
         {
             "name": "art-of-wifi/unifi-network-application-api-client",

@@ -2,11 +2,13 @@
 
 namespace UniFi_API;
 
-use Exception;
+use UniFi_API\Exceptions\ConsoleOfflineException;
+use UniFi_API\Exceptions\ControllerErrorException;
 use UniFi_API\Exceptions\CurlGeneralErrorException;
 use UniFi_API\Exceptions\CurlExtensionNotLoadedException;
 use UniFi_API\Exceptions\CurlTimeoutException;
 use UniFi_API\Exceptions\EmailInvalidException;
+use UniFi_API\Exceptions\InvalidArgumentException;
 use UniFi_API\Exceptions\InvalidBaseUrlException;
 use UniFi_API\Exceptions\InvalidCurlMethodException;
 use UniFi_API\Exceptions\InvalidSiteNameException;
@@ -17,6 +19,7 @@ use UniFi_API\Exceptions\MacAddressEmptyException;
 use UniFi_API\Exceptions\MacAddressInvalidException;
 use UniFi_API\Exceptions\MethodDeprecatedException;
 use UniFi_API\Exceptions\NotAUnifiOsConsoleException;
+use UniFi_API\Exceptions\UnifiApiException;
 
 /**
  * The UniFi API client class.
@@ -36,9 +39,15 @@ use UniFi_API\Exceptions\NotAUnifiOsConsoleException;
 class Client
 {
     /** Constants. */
-    const CLASS_VERSION        = '2.0.11';
+    const CLASS_VERSION        = '2.4.0';
     const CURL_METHODS_ALLOWED = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
     const DEFAULT_CURL_METHOD  = 'GET';
+
+    /** Periods accepted by stat_series() (Network Application 11.x statistics engine). */
+    const STAT_SERIES_PERIODS = ['HOUR', 'DAY', 'WEEK', 'MONTH'];
+
+    /** Site Manager proxy base URL. */
+    protected const SITE_MANAGER_BASE_URL = 'https://api.ui.com';
 
     /**
      * Protected properties.
@@ -55,6 +64,10 @@ class Client
     protected bool   $is_logged_in               = false;
     protected bool   $is_unifi_os                = false;
     protected int    $exec_retries               = 0;
+    protected string $api_key                    = '';
+    protected bool   $is_site_manager_proxy      = false;
+    protected string $site_manager_console_id    = '';
+    protected string $site_manager_api_key       = '';
     protected string $cookies                    = '';
     protected int    $cookies_created_at         = 0;
     protected        $last_results_raw           = null;
@@ -134,7 +147,7 @@ class Client
      *
      * @see https://www.php.net/manual/en/language.oop5.decon.php
      * @note to force the class instance to log out when you're done, call logout()
-     * @throws CurlGeneralErrorException|CurlTimeoutException|CurlTimeoutException
+     * @throws CurlGeneralErrorException|CurlTimeoutException
      */
     public function __destruct()
     {
@@ -158,6 +171,11 @@ class Client
      */
     public function login(): bool
     {
+        /** Site Manager proxy mode is stateless, no login needed. */
+        if ($this->is_site_manager_proxy) {
+            return true;
+        }
+
         /** Skip the login process if already logged in. */
         if ($this->update_unificookie()) {
             $this->is_logged_in = true;
@@ -247,10 +265,20 @@ class Client
      * Logout from the UniFi controller.
      *
      * @return bool true upon success
-     * @throws CurlGeneralErrorException|CurlTimeoutException|CurlTimeoutException
+     * @throws CurlGeneralErrorException|CurlTimeoutException
      */
     public function logout(): bool
     {
+        /** Site Manager proxy mode is stateless, no logout needed. */
+        if ($this->is_site_manager_proxy) {
+            return true;
+        }
+
+        /** API key auth is stateless, no logout needed. */
+        if ($this->is_api_key_mode()) {
+            return true;
+        }
+
         /** Prepare cURL and options. */
         $ch = $this->get_curl_handle();
 
@@ -312,7 +340,7 @@ class Client
      * @param string|null $ap_mac optional, AP MAC address to which the client is connected
      *                            (should result in faster authorization for the client device)
      * @return bool true upon success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function authorize_guest(string $mac, int $minutes, ?int $up = null, ?int $down = null, ?int $megabytes = null, ?string $ap_mac = null): bool
     {
@@ -345,7 +373,7 @@ class Client
      *
      * @param string $mac client MAC address
      * @return bool true upon success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function unauthorize_guest(string $mac): bool
     {
@@ -361,7 +389,7 @@ class Client
      *
      * @param string $mac client MAC address
      * @return bool true upon success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function reconnect_sta(string $mac): bool
     {
@@ -377,7 +405,7 @@ class Client
      *
      * @param string $mac client MAC address
      * @return bool true upon success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function block_sta(string $mac): bool
     {
@@ -393,7 +421,7 @@ class Client
      *
      * @param string $mac client MAC address
      * @return bool true upon success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function unblock_sta(string $mac): bool
     {
@@ -410,7 +438,7 @@ class Client
      * @note can be slow (up to 5 minutes) on larger controllers
      * @param array|string $mac array of client MAC addresses (strings) or a single MAC address string
      * @return bool true upon success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function forget_sta($mac): bool
     {
@@ -438,7 +466,7 @@ class Client
      * @param bool|null $is_wired optional, defines whether the new user/client-device is wired or not
      * @return array|bool returns an array with a single object containing details of the new user/client-device on
      *                    success, else returns false
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function create_user(
         string  $mac,
@@ -480,7 +508,7 @@ class Client
      * @param string $user_id id of the client-device to be modified
      * @param string $note optional, note to be applied to the client-device
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_sta_note(string $user_id, string $note = ''): bool
     {
@@ -496,7 +524,7 @@ class Client
      * @param string $name optional, name to be applied to the client device, when empty or not set,
      *                        the existing name for the client device is removed
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_sta_name(string $user_id, string $name = ''): bool
     {
@@ -511,6 +539,8 @@ class Client
      * @note - defaults to the past 12 hours
      *       - make sure that the retention policy for 5 minutes stats is set to the correct value in
      *         the controller settings
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs optional, array of attributes to collect. Default values:
@@ -519,7 +549,7 @@ class Client
      *                            Example values:
      *                            'airtime_avg', 'latency_avg', 'latency_min', 'latency_max'
      * @return array|bool returns an array of 5-minute stats objects for the current site
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_5minutes_site(?int $start = null, ?int $end = null, ?array $attribs = null)
     {
@@ -536,11 +566,13 @@ class Client
      *
      * @todo add support for optional attrib parameter: airtime_avg
      * @note - defaults to the past 7*24 hours
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs optional, array of attributes to collect.
      * @return array|bool returns an array of hourly stats objects for the current site
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_site() for details on attribs
      */
     public function stat_hourly_site(?int $start = null, ?int $end = null, ?array $attribs = null)
@@ -557,11 +589,13 @@ class Client
      * Fetch daily site stats.
      *
      * @note - defaults to the past 52*7*24 hours
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs optional, array of attributes to collect.
      * @return array|bool returns an array of daily stats objects for the current site
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_site() for details on attribs
      */
     public function stat_daily_site(?int $start = null, ?int $end = null, ?array $attribs = null)
@@ -578,11 +612,13 @@ class Client
      * Fetch monthly site stats.
      *
      * @note - defaults to the past 52 weeks (52*7*24 hours)
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs optional, array of attributes to collect.
      * @return array|bool returns an array of monthly stats objects for the current site
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_site() for details on attribs
      */
     public function stat_monthly_site(?int $start = null, ?int $end = null, ?array $attribs = null)
@@ -601,20 +637,26 @@ class Client
      * @note - defaults to the past 12 hours
      *       - make sure that the retention policy for 5 minutes stats is set to the correct value in
      *         the controller settings
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
-     * @param string|null $mac optional, AP MAC address to return stats for, when empty,
-     *                      stats for all APs are returned
-     * @param array|null $attribs optional, array of attributes to collect, default: (bytes, num_sta, time). Valid values:
+     * @param string|array|null $mac optional, a single AP MAC address to return stats for, or an array of AP
+     *                      MAC addresses. When empty, stats for all APs are returned, but note that the
+     *                      controller caps such a response at 10 APs; pass an array of MAC addresses to
+     *                      work around this limit
+     * @param array|null $attribs optional, array of attributes to collect, default: ['bytes', 'num_sta', 'time'].
+     *                            Valid values:
      *                            bytes, num_sta, time, wifi_tx_attempts, tx_retries, wifi_tx_dropped,
      *                            mac_filter_rejections, user-wlan-num_sta_connected, user-wlan-num_sta_disconnected,
      *                            na-wifi_tx_attempts, ng-wifi_tx_attempts, na-wifi_tx_dropped, ng-wifi_tx_dropped,
      *                            na-tx_retries, ng-tx_retries, na-tx_packets, ng-tx_packets, na-tx_bytes,
-     *                            ng-tx_bytes, na-rx_packets, ng-rx_packets, na-rx_bytes, ng-rx_bytes
+     *                            ng-tx_bytes, na-rx_packets, ng-rx_packets, na-rx_bytes, ng-rx_bytes, rx_bytes, tx_bytes,
+     *                            rx_packets, tx_packets, na-num_sta, ng-num_sta, duration, satisfaction
      * @return array|bool returns an array of 5-minute stats objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
-    public function stat_5minutes_aps(?int $start = null, ?int $end = null, ?string $mac = null, ?array $attribs = null)
+    public function stat_5minutes_aps(?int $start = null, ?int $end = null, $mac = null, ?array $attribs = null)
     {
         $end     = empty($end) ? time() * 1000 : $end;
         $start   = empty($start) ? $end - (12 * 3600 * 1000) : $start;
@@ -622,7 +664,11 @@ class Client
         $payload = ['attrs' => $attribs, 'start' => $start, 'end' => $end];
 
         if (!empty($mac)) {
-            $payload['mac'] = strtolower($mac);
+            if (is_array($mac)) {
+                $payload['macs'] = array_values(array_map('strtolower', $mac));
+            } else {
+                $payload['mac'] = strtolower($mac);
+            }
         }
 
         return $this->fetch_results('/api/s/' . $this->site . '/stat/report/5minutes.ap', $payload);
@@ -634,16 +680,20 @@ class Client
      * @note - defaults to the past 7*24 hours
      *       - make sure that the retention policy for hourly stats is set to the correct value in
      *         the controller settings
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
-     * @param string|null $mac optional, AP MAC address to return stats for, when empty,
-     *                         stats for all APs are returned
+     * @param string|array|null $mac optional, a single AP MAC address to return stats for, or an array of AP
+     *                         MAC addresses. When empty, stats for all APs are returned, but note that the
+     *                         controller caps such a response at 10 APs; pass an array of MAC addresses to
+     *                         work around this limit
      * @param array|null $attribs optional, array of attributes to collect, default: (bytes, num_sta, time).
      * @return array|bool returns an array of hourly stats objects
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_aps() for supported attribs
      */
-    public function stat_hourly_aps(?int $start = null, ?int $end = null, ?string $mac = null, ?array $attribs = null)
+    public function stat_hourly_aps(?int $start = null, ?int $end = null, $mac = null, ?array $attribs = null)
     {
         $end     = empty($end) ? (time() * 1000) : $end;
         $start   = empty($start) ? $end - (7 * 24 * 3600 * 1000) : $start;
@@ -651,7 +701,11 @@ class Client
         $payload = ['attrs' => $attribs, 'start' => $start, 'end' => $end];
 
         if (!empty($mac)) {
-            $payload['mac'] = strtolower($mac);
+            if (is_array($mac)) {
+                $payload['macs'] = array_values(array_map('strtolower', $mac));
+            } else {
+                $payload['mac'] = strtolower($mac);
+            }
         }
 
         return $this->fetch_results('/api/s/' . $this->site . '/stat/report/hourly.ap', $payload);
@@ -663,16 +717,20 @@ class Client
      * @note - defaults to the past 7*24 hours
      *       - make sure that the retention policy for hourly stats is set to the correct value in
      *         the controller settings
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
-     * @param string|null $mac optional, AP MAC address to return stats for, when empty,
-     *                         stats for all APs are returned
+     * @param string|array|null $mac optional, a single AP MAC address to return stats for, or an array of AP
+     *                         MAC addresses. When empty, stats for all APs are returned, but note that the
+     *                         controller caps such a response at 10 APs; pass an array of MAC addresses to
+     *                         work around this limit
      * @param array|null $attribs optional, array of attributes to collect, default: (bytes, num_sta, time).
      * @return array|bool returns an array of daily stats objects
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_aps() for supported attribs
      */
-    public function stat_daily_aps(?int $start = null, ?int $end = null, ?string $mac = null, ?array $attribs = null)
+    public function stat_daily_aps(?int $start = null, ?int $end = null, $mac = null, ?array $attribs = null)
     {
         $end     = empty($end) ? time() * 1000 : $end;
         $start   = empty($start) ? $end - (7 * 24 * 3600 * 1000) : $start;
@@ -680,7 +738,11 @@ class Client
         $payload = ['attrs' => $attribs, 'start' => $start, 'end' => $end];
 
         if (!empty($mac)) {
-            $payload['mac'] = strtolower($mac);
+            if (is_array($mac)) {
+                $payload['macs'] = array_values(array_map('strtolower', $mac));
+            } else {
+                $payload['mac'] = strtolower($mac);
+            }
         }
 
         return $this->fetch_results('/api/s/' . $this->site . '/stat/report/daily.ap', $payload);
@@ -692,16 +754,20 @@ class Client
      * @note - defaults to the past 52 weeks (52*7*24 hours)
      *       - make sure that the retention policy for hourly stats is set to the correct value in
      *         the controller settings
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
-     * @param string|null $mac optional, AP MAC address to return stats for, when empty,
-     *                         stats for all APs are returned
+     * @param string|array|null $mac optional, a single AP MAC address to return stats for, or an array of AP
+     *                         MAC addresses. When empty, stats for all APs are returned, but note that the
+     *                         controller caps such a response at 10 APs; pass an array of MAC addresses to
+     *                         work around this limit
      * @param array|null $attribs optional, array of attributes to collect, default: (bytes, num_sta, time).
      * @return array|bool returns an array of monthly stats objects
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_aps() for supported attribs
      */
-    public function stat_monthly_aps(?int $start = null, ?int $end = null, ?string $mac = null, ?array $attribs = null)
+    public function stat_monthly_aps(?int $start = null, ?int $end = null, $mac = null, ?array $attribs = null)
     {
         $end     = empty($end) ? time() * 1000 : $end;
         $start   = empty($start) ? $end - (52 * 7 * 24 * 3600 * 1000) : $start;
@@ -709,7 +775,11 @@ class Client
         $payload = ['attrs' => $attribs, 'start' => $start, 'end' => $end];
 
         if (!empty($mac)) {
-            $payload['mac'] = strtolower($mac);
+            if (is_array($mac)) {
+                $payload['macs'] = array_values(array_map('strtolower', $mac));
+            } else {
+                $payload['mac'] = strtolower($mac);
+            }
         }
 
         return $this->fetch_results('/api/s/' . $this->site . '/stat/report/monthly.ap', $payload);
@@ -723,6 +793,8 @@ class Client
      *         the controller settings
      *       - make sure that the "Clients Historical Data" option has been enabled in the UniFi controller settings in
      *         the Maintenance section
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param string|null $mac optional, MAC address of the user/client device to return stats for
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
@@ -731,7 +803,7 @@ class Client
      *                            tx_packets, satisfaction, wifi_tx_attempts, 'duration'
      *                            default value is ['rx_bytes', 'tx_bytes', 'time']
      * @return array|bool returns an array of 5-minute stats objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_5minutes_user(?string $mac = null, ?int $start = null, ?int $end = null, ?array $attribs = null)
     {
@@ -751,12 +823,14 @@ class Client
      *         the controller settings
      *       - make sure that "Clients Historical Data" has been enabled in the UniFi controller settings in the Maintenance
      *         section
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param string|null $mac optional, MAC address of the user/client device to return stats for
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs array containing attributes (strings) to be returned
      * @return array|bool returns an array of hourly stats objects
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_user() for details on attribs
      */
     public function stat_hourly_user(?string $mac = null, ?int $start = null, ?int $end = null, ?array $attribs = null)
@@ -781,12 +855,14 @@ class Client
      *         the controller settings
      *       - make sure that "Clients Historical Data" has been enabled in the UniFi controller settings in the Maintenance
      *         section
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param string|null $mac optional, MAC address of the user/client device to return stats for
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs array containing attributes (strings) to be returned
      * @return array|bool returns an array of daily stats objects
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_user() for details on attribs
      */
     public function stat_daily_user(?string $mac = null, ?int $start = null, ?int $end = null, ?array $attribs = null)
@@ -811,12 +887,14 @@ class Client
      *         the controller settings
      *       - make sure that "Clients Historical Data" has been enabled in the UniFi controller settings in the Maintenance
      *         section
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param string|null $mac optional, MAC address of the user/client device to return stats for
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs array containing attributes (strings) to be returned
      * @return array|bool returns an array of monthly stats objects
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_user() for details on attribs
      */
     public function stat_monthly_user(?string $mac = null, ?int $start = null, ?int $end = null, ?array $attribs = null)
@@ -840,6 +918,8 @@ class Client
      *       - make sure that the retention policy for 5 minutes stats is set to the correct value in
      *         the controller settings
      *       - requires a UniFi gateway
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs array containing attributes (strings) to be returned, valid values are:
@@ -847,7 +927,7 @@ class Client
      *                            lan-tx_bytes, lan-rx_packets, lan-tx_packets, lan-rx_dropped, lan-tx_dropped
      *                            default is ['time', 'mem', 'cpu', 'loadavg_5']
      * @return array|bool returns an array of 5-minute stats objects for the gateway belonging to the current site
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_5minutes_gateway(?int $start = null, ?int $end = null, ?array $attribs = null)
     {
@@ -864,11 +944,13 @@ class Client
      *
      * @note - defaults to the past 7*24 hours
      *       - requires a UniFi gateway
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs array containing attributes (strings) to be returned
      * @return array|bool returns an array of hourly stats objects for the gateway belonging to the current site
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_gateway() for details on attribs
      */
     public function stat_hourly_gateway(?int $start = null, ?int $end = null, ?array $attribs = null)
@@ -886,11 +968,13 @@ class Client
      *
      * @note - defaults to the past 52 weeks (52*7*24 hours)
      *       - requires a UniFi gateway
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs array containing attributes (strings) to be returned
      * @return array|bool returns an array of hourly stats objects for the gateway belonging to the current site
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_gateway() for details on attribs
      */
     public function stat_daily_gateway(?int $start = null, ?int $end = null, ?array $attribs = null)
@@ -908,11 +992,13 @@ class Client
      *
      * @note - defaults to the past 52 weeks (52*7*24 hours)
      *       - requires a UniFi gateway
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param array|null $attribs array containing attributes (strings) to be returned
      * @return array|bool returns an array of monthly stats objects for the gateway belonging to the current site
-     * @throws Exception
+     * @throws UnifiApiException
      * @see stat_5minutes_gateway() for details on attribs
      */
     public function stat_monthly_gateway(?int $start = null, ?int $end = null, ?array $attribs = null)
@@ -930,10 +1016,12 @@ class Client
      *
      * @note - defaults to the past 24 hours
      *       - requires a UniFi gateway
+     *       - Network Application 11.x no longer populates this endpoint, it always returns an empty array there.
+     *         Use stat_series() instead and see get_stats_source() to detect which one to call
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @return array|bool returns an array of speed test result objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_speedtest_results(?int $start = null, ?int $end = null)
     {
@@ -945,15 +1033,175 @@ class Client
     }
 
     /**
+     * Fetch the statistics source of the controller.
+     *
+     * @note - Network Application 11.0 moved all time-series statistics to a new statistics engine. This endpoint
+     *         reports which one the controller uses: 'LEGACY' (10.x, the stat/report/* endpoints are populated)
+     *         or 'MODERN' (11.x and later, the stat/report/* endpoints always return empty results and
+     *         stat_series() must be used instead)
+     *       - controllers older than 10.x do not have this endpoint and answer with an HTML 404 page, which
+     *         surfaces as a JsonDecodeException; treat that as 'LEGACY'
+     * @return string|bool 'LEGACY' or 'MODERN'
+     * @throws UnifiApiException
+     */
+    public function get_stats_source()
+    {
+        return $this->fetch_results('/v2/api/stats/source');
+    }
+
+    /**
+     * Fetch the statistics schemas supported by stat_series().
+     *
+     * @note - requires Network Application 11.0 or later, older versions answer with an HTML 404 page which
+     *         surfaces as a JsonDecodeException
+     *       - each schema object contains the schema 'name', its 'keys' (e.g. siteId, deviceMac, clientId), its
+     *         'values' (the value fields a bucket can contain) and its 'nested' groups (each with their own
+     *         'name', 'keys' and 'values'), e.g. byRadioBand, byVap, byWlan
+     * @return array|bool returns an array of schema objects
+     * @throws UnifiApiException
+     */
+    public function list_stat_schemas()
+    {
+        return $this->fetch_results('/v2/api/stats/schemas');
+    }
+
+    /**
+     * Fetch a statistics time series from the Network Application 11.x statistics engine.
+     *
+     * @note - requires Network Application 11.0 or later (see get_stats_source()), older versions answer with an
+     *         HTML 404 page which surfaces as a JsonDecodeException
+     *       - the data store starts at the moment the controller was upgraded to 11.x, older history is not
+     *         available
+     *       - exactly one of $period and $start must be provided. With $period the window is the period ending at
+     *         $end and the bucket size follows the period: 'HOUR' and 'DAY' use 5-minute buckets, 'WEEK' hourly
+     *         buckets and 'MONTH' 8-hour buckets. With $start (Network Application 11.0.89 and later) the window
+     *         is $start to $end and the controller picks the bucket size from the span: up to 1 day 5-minute
+     *         buckets, up to 7 days hourly, up to 60 days 8-hour buckets, beyond that calendar months. There is no
+     *         daily bucket size; derive daily values from the three 8-hour buckets per day. Network Application
+     *         11.0.83 ignores $start, so prefer $period and move $end back to page through history
+     *       - $filter uses the same grammar as the official Network API, e.g. "siteId.eq('<site _id>')",
+     *         "deviceMac.in('aa:bb:cc:dd:ee:ff','11:22:33:44:55:66')", "clientId.eq('<client mac>')" or
+     *         "and(siteId.eq('…'),unitId.isNull())". Without a filter the results contain every key (all sites,
+     *         devices or clients). The site key is the site '_id' as returned by stat_sites() or list_sites(), not
+     *         the short site name
+     *       - $projection selects the fields to return and is a comma-separated list of "values(field,…)" for the
+     *         top-level value fields and "nested(group)" or "nested(group(values(field,…)))" for nested groups,
+     *         e.g. "values(rxBytes,txBytes),nested(byRadioBand)". Without a projection all top-level values and no
+     *         nested groups are returned
+     *       - the response is an array of key objects (e.g. with 'siteId' and/or 'deviceMac'), each with a 'series'
+     *         array of bucket objects containing 'timestamp' (Unix timestamp in milliseconds), 'duration'
+     *         (milliseconds) and the requested values. Values are floats averaged per bucket
+     * @param string $schema schema name, see list_stat_schemas(), e.g. 'wanBySite', 'wirelessBySiteByDevice',
+     *                       'activityBySiteByClient', 'clientCountBySite', 'systemBySiteByDevice'
+     * @param string|null $period optional, one of 'HOUR', 'DAY', 'WEEK' or 'MONTH', defaults to 'DAY' when $start is
+     *                            also null
+     * @param int|null $end optional, end of the window as a Unix timestamp in milliseconds, defaults to now
+     * @param int|null $start optional, start of the window as a Unix timestamp in milliseconds, mutually exclusive
+     *                        with $period, requires Network Application 11.0.89 or later
+     * @param string|null $filter optional, filter expression
+     * @param string|null $projection optional, projection expression
+     * @param bool $no_gaps optional, when true the series contains a bucket for every interval in the window, the
+     *                      ones without data only carry 'timestamp' and 'duration'; by default such buckets are omitted
+     * @return array|bool returns an array of key objects, each containing a 'series' array of bucket objects
+     * @throws UnifiApiException|InvalidArgumentException
+     */
+    public function stat_series(
+        string  $schema,
+        ?string $period = null,
+        ?int    $end = null,
+        ?int    $start = null,
+        ?string $filter = null,
+        ?string $projection = null,
+        bool    $no_gaps = false
+    ) {
+        $schema = trim($schema);
+
+        if ($schema === '') {
+            throw new InvalidArgumentException('Schema cannot be empty');
+        }
+
+        if ($period !== null && $start !== null) {
+            throw new InvalidArgumentException('Provide either a period or a start timestamp, not both');
+        }
+
+        if ($period === null && $start === null) {
+            $period = 'DAY';
+        }
+
+        if ($period !== null) {
+            $period = strtoupper(trim($period));
+
+            if (!in_array($period, self::STAT_SERIES_PERIODS, true)) {
+                throw new InvalidArgumentException('Invalid period: ' . $period . ', expected one of ' . implode(', ', self::STAT_SERIES_PERIODS));
+            }
+        }
+
+        $query = ['schema' => $schema];
+
+        if ($period !== null) {
+            $query['period'] = $period;
+        }
+
+        if ($start !== null) {
+            $query['start'] = $start;
+        }
+
+        $query['end'] = empty($end) ? time() * 1000 : $end;
+
+        if (!empty($filter)) {
+            $query['filter'] = $filter;
+        }
+
+        if (!empty($projection)) {
+            $query['projection'] = $projection;
+        }
+
+        if ($no_gaps) {
+            $query['noGaps'] = 'true';
+        }
+
+        return $this->fetch_results('/v2/api/stats/recent/series?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986));
+    }
+
+    /**
+     * Fetch the aggregated dashboard data.
+     *
+     * @note - requires Network Application 10.x or later, this is the data source of the dashboard in the
+     *         Network Application UI and the replacement for list_dashboard() which Network Application 11.x
+     *         removed
+     *       - returns a single object with one property per dashboard widget, e.g. 'wan_activity', 'wifi_activity',
+     *         'radio_activity', 'wan_history', 'speed_test', 'isp_metrics', 'wifi_connectivity',
+     *         'most_active_apps_aps_clients' (top applications, APs and clients by traffic, as a 'usage_by' array
+     *         discriminated by 'type') and 'most_common_client_fingerprints' (fingerprint counters, resolve the
+     *         ids with list_fingerprint_devices()). The 'dashboard_meta' property lists the widgets present,
+     *         which depend on the site (e.g. no gateway widgets without a UniFi gateway)
+     *       - history widgets contain 5-minute buckets covering the past $history_seconds seconds
+     * @param int $history_seconds optional, length of the history window in seconds, default value is 86400
+     *                             (24 hours)
+     * @return object|bool returns the aggregated dashboard object
+     * @throws UnifiApiException|InvalidArgumentException
+     */
+    public function list_aggregated_dashboard(int $history_seconds = 86400)
+    {
+        if ($history_seconds <= 0) {
+            throw new InvalidArgumentException('History seconds must be a positive integer');
+        }
+
+        return $this->fetch_results('/v2/api/site/' . $this->site . '/aggregated-dashboard?historySeconds=' . $history_seconds);
+    }
+
+    /**
      * Fetch IPS/IDS events.
      *
      * @note - defaults to the past 24 hours
      *       - requires a UniFi gateway
+     *       - Network Application 11.x removed this endpoint, the controller answers with HTTP 404 (api.err.NotFound)
+     *         and this method throws a ControllerErrorException. Use get_system_log('threat-alert') instead
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @param int|null $limit optional, maximum number of events to return, defaults to 10000
      * @return array|bool returns an array of IPS/IDS event objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_ips_events(?int $start = null, ?int $end = null, ?int $limit = null)
     {
@@ -977,7 +1225,7 @@ class Client
      * @param string|null $type optional, client type to return sessions for, can be 'all', 'guest' or 'user'; default
      *                      value is 'all'
      * @return array|bool returns an array of login session objects for all devices or a single device
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_sessions(?int $start = null, ?int $end = null, ?string $mac = null, ?string $type = 'all')
     {
@@ -1004,7 +1252,7 @@ class Client
      * @param string $mac client MAC address
      * @param int|null $limit optional, maximum number of sessions to get (default value is 5)
      * @return array|bool returns an array of login session objects for all devices or a single device
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_sta_sessions_latest(string $mac, ?int $limit = null)
     {
@@ -1022,7 +1270,7 @@ class Client
      * @param int|null $start optional, Unix timestamp in milliseconds
      * @param int|null $end optional, Unix timestamp in milliseconds
      * @return array|bool returns an array of authorization objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_auths(?int $start = null, ?int $end = null)
     {
@@ -1040,7 +1288,7 @@ class Client
      *       the returned stats per client are all-time totals, irrespective of the value of $historyhours
      * @param int $historyhours optional, hours to go back (default is 8760 hours or 1 year)
      * @return array|bool returns an array of client device objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_allusers(int $historyhours = 8760)
     {
@@ -1055,7 +1303,7 @@ class Client
      * @note defaults to the past 7*24 hours
      * @param int $within optional, time frame in hours to go back to list guests with valid access (default = 24*365 hours)
      * @return array|bool returns an array of guest device objects with valid access
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_guests(int $within = 8760)
     {
@@ -1070,7 +1318,7 @@ class Client
      * @param string|null $mac optional, the MAC address of a single online client device for which the call must be made
      * @return array|bool returns an array of online client device objects, or in case of a single device request, returns a
      *                    single client device object, false upon error
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function list_clients(?string $mac = null)
     {
@@ -1089,7 +1337,7 @@ class Client
      * @param bool $include_traffic_usage include the traffic usage of the client devices in the response
      * @param bool $include_unifi_devices include UniFi devices in the response
      * @return array|bool returns an array of active client device objects, false upon error
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_active_clients(bool $include_traffic_usage = true, bool $include_unifi_devices = true)
     {
@@ -1109,7 +1357,7 @@ class Client
      * @param int $within_hours the number of hours a device has been offline to be included in the response
      *                         (0 = no limit)
      * @return array|bool returns an array of (offline) client device objects, false upon error
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_clients_history(bool $only_non_blocked = true, bool $include_unifi_devices = true, int $within_hours = 0)
     {
@@ -1127,7 +1375,7 @@ class Client
      *
      * @param string $mac client device MAC address
      * @return array|bool returns an object with the client device information
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function stat_client(string $mac)
     {
@@ -1143,7 +1391,7 @@ class Client
      *                                fingerprint_source in the client device objects, the default value is 0
      * @return array|bool an array of fingerprints, contain dev_ids, dev_type_ids, family_ids, os_name_ids, os_class_ids
      *                    and vendor_ids, false upon error
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_fingerprint_devices(int $fingerprint_source = 0)
     {
@@ -1156,7 +1404,7 @@ class Client
      * @param string $client_id _id value of the client device to be modified
      * @param string $group_id _id value of the user group to assign client device to
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_usergroup(string $client_id, string $group_id): bool
     {
@@ -1173,7 +1421,7 @@ class Client
      * @param string|null $network_id optional, _id value for the network where the ip belongs to
      * @param string|null $fixed_ip optional, IP address, value of client device's fixed_ip field
      * @return array|bool returns an array containing a single object with attributes of the updated client on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function edit_client_fixedip(string $client_id, bool $use_fixedip, ?string $network_id = null, ?string $fixed_ip = null)
     {
@@ -1203,7 +1451,7 @@ class Client
      * @param string $client_id _id value for the client device
      * @param string $name name of the client
      * @return array|bool returns an array containing a single object with attributes of the updated client on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function edit_client_name(string $client_id, string $name)
     {
@@ -1225,7 +1473,7 @@ class Client
      * Fetch user groups
      *
      * @return array|bool returns an array of user group objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_usergroups()
     {
@@ -1240,7 +1488,7 @@ class Client
      * @param int $group_up limit upload bandwidth in Kbps (default = -1, which sets bandwidth to unlimited)
      * @return array|bool containing a single object with attributes of the new usergroup ("_id", "name",
      *               "qos_rate_max_down", "qos_rate_max_up", "site_id") on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_usergroup(string $group_name, int $group_dn = -1, int $group_up = -1)
     {
@@ -1262,7 +1510,7 @@ class Client
      * @param int $group_dn limit download bandwidth in Kbps (default = -1, which sets bandwidth to unlimited)
      * @param int $group_up limit upload bandwidth in Kbps (default = -1, which sets bandwidth to unlimited)
      * @return array|bool returns an array containing a single object with attributes of the updated usergroup on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function edit_usergroup(string $group_id, string $site_id, string $group_name, int $group_dn = -1, int $group_up = -1)
     {
@@ -1284,7 +1532,7 @@ class Client
      *
      * @param string $group_id _id value of the user group to delete
      * @return bool returns true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function delete_usergroup(string $group_id): bool
     {
@@ -1297,7 +1545,7 @@ class Client
      * Fetch AP groups
      *
      * @return array|bool containing the current AP groups on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_apgroups()
     {
@@ -1311,7 +1559,7 @@ class Client
      * @param array $device_macs optional, array containing the MAC addresses (strings) of the APs to add to the new
      *                            group
      * @return array|bool containing a single object with attributes of the new AP group on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_apgroup(string $group_name, array $device_macs = [])
     {
@@ -1328,7 +1576,7 @@ class Client
      * @param array $device_macs array containing the members of the AP group which overwrites the existing
      *                            group_members (passing an empty array clears the AP member list)
      * @return array|bool containing a single object with attributes of the updated AP group on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function edit_apgroup(string $group_id, string $group_name, array $device_macs)
     {
@@ -1349,7 +1597,7 @@ class Client
      *
      * @param string $group_id _id value of the AP group to delete
      * @return bool returns true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function delete_apgroup(string $group_id): bool
     {
@@ -1363,7 +1611,7 @@ class Client
      *
      * @param string $group_id optional, _id value of the single firewall group to list
      * @return array|bool containing the current firewall groups or the selected firewall group on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_firewallgroups(string $group_id = '')
     {
@@ -1379,7 +1627,7 @@ class Client
      *                              port numbers)
      *                              (default is an empty array)
      * @return array|bool containing a single object with attributes of the new firewall group on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_firewallgroup(string $group_name, string $group_type, array $group_members = [])
     {
@@ -1404,7 +1652,7 @@ class Client
      * @param array $group_members array containing the members of the group (IPv4 addresses, IPv6 addresses or port
      *                              numbers) which overwrites the existing group_members (default is an empty array)
      * @return array|bool containing a single object with attributes of the updated firewall group on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function edit_firewallgroup(string $group_id, string $site_id, string $group_name, string $group_type, array $group_members = [])
     {
@@ -1430,7 +1678,7 @@ class Client
      *
      * @param string $group_id _id value of the firewall group to delete
      * @return bool returns true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function delete_firewallgroup(string $group_id): bool
     {
@@ -1443,7 +1691,7 @@ class Client
      * Fetch firewall rules (using REST).
      *
      * @return array|bool containing the current firewall rules on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_firewallrules()
     {
@@ -1455,7 +1703,7 @@ class Client
      *
      * @param string $route_id _id value of the static route to get settings for
      * @return array|bool containing the static routes and their settings
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_routing(string $route_id = '')
     {
@@ -1466,7 +1714,7 @@ class Client
      * Fetch health metrics.
      *
      * @return array|bool  containing health metric objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_health()
     {
@@ -1476,10 +1724,12 @@ class Client
     /**
      * Fetch dashboard metrics.
      *
+     * @note Network Application 11.x removed this endpoint, the controller answers with HTTP 404 (api.err.NotFound)
+     *       and this method throws a ControllerErrorException. Use list_aggregated_dashboard() instead.
      * @param boolean $five_minutes when true, return stats based on 5 minute intervals,
      *                              returns hourly stats by default
      * @return array|bool containing dashboard metric objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_dashboard(bool $five_minutes = false)
     {
@@ -1492,7 +1742,7 @@ class Client
      * Fetch client devices.
      *
      * @return array|bool containing known client device objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_users()
     {
@@ -1503,7 +1753,7 @@ class Client
      * List of UniFi devices with a basic subset of properties (e.g., mac, state, adopted, disabled, type, model, name).
      *
      * @return array|bool an array containing known UniFi device objects, false upon error
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_devices_basic()
     {
@@ -1517,7 +1767,7 @@ class Client
      *                           to filter by. May also be a (lowercase) string containing a single MAC address
      * @return array|bool an array containing known UniFi device objects, optionally filtered by the <macs>
      *                    parameter, false upon error
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function list_devices($macs = [])
     {
@@ -1538,7 +1788,7 @@ class Client
      * Fetch (device) tags (using REST).
      *
      * @return array|bool containing known device tag objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_tags()
     {
@@ -1551,7 +1801,7 @@ class Client
      * @param string $name required, the tag name to add
      * @param array|null $macs optional, an array of the MAC address(es) for the device(s) to tag with the new tag
      * @return bool return true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_tag(string $name, ?array $macs = null): bool
     {
@@ -1570,7 +1820,7 @@ class Client
      * @param array $macs required, an array of the MAC address(es) for the device(s) to tag
      * @param string $tag_id required, the _id value of the tag to set
      * @return bool return true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_tagged_devices(array $macs, string $tag_id): bool
     {
@@ -1586,7 +1836,7 @@ class Client
      *
      * @param string $tag_id required, the _id value of the tag to retrieve
      * @return array|bool containing matching tag objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function get_tag(string $tag_id)
     {
@@ -1600,7 +1850,7 @@ class Client
      *
      * @param string $tag_id required, the _id value of the tag to set
      * @return bool return true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function delete_tag(string $tag_id): bool
     {
@@ -1614,7 +1864,7 @@ class Client
      *
      * @param int $within optional, hours to go back to list discovered "rogue" access points (default = 24 hours)
      * @return array|bool containing rogue/neighboring access point objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_rogueaps(int $within = 24)
     {
@@ -1627,7 +1877,7 @@ class Client
      * Fetch known rogue access points.
      *
      * @return array|bool containing known rogue access point objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_known_rogueaps()
     {
@@ -1640,7 +1890,7 @@ class Client
      * @note this is an experimental function, please do not use unless you know exactly what you're doing
      * @param int $days number of days for which the backup must be generated
      * @return array|bool URL from where the backup file can be downloaded once generated, false upon failure
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function generate_backup(int $days = -1)
     {
@@ -1655,7 +1905,7 @@ class Client
      * @note this is an experimental function, please do not use unless you know exactly what you're doing
      * @param string $filepath the path to the generated backup file
      * @return string|bool the raw content of the backup file, false upon failure
-     * @throws Exception|CurlGeneralErrorException|CurlTimeoutException
+     * @throws UnifiApiException|CurlGeneralErrorException|CurlTimeoutException
      */
     public function download_backup(string $filepath)
     {
@@ -1666,7 +1916,7 @@ class Client
      * Fetch auto backups.
      *
      * @return array|bool containing objects with backup details on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_backups()
     {
@@ -1680,7 +1930,7 @@ class Client
      *
      * @note this is an experimental function, please do not use unless you know exactly what you're doing
      * @return array|bool URL from where the backup/export file can be downloaded once generated, false upon failure
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function generate_backup_site()
     {
@@ -1694,7 +1944,7 @@ class Client
      *
      * @return array|bool a list of sites on this controller that the credentials used have access to,
      *                    together with some basic attributes for each site
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_sites()
     {
@@ -1705,7 +1955,7 @@ class Client
      * Fetch sites stats.
      *
      * @return array|bool statistics for all sites hosted on this controller
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_sites()
     {
@@ -1718,7 +1968,7 @@ class Client
      * @param string $description the long name for the new site
      * @return array|bool false on failure or a single object with attributes of the new site ("_id", "desc", "name") on
      *                    success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_site(string $description)
     {
@@ -1732,7 +1982,7 @@ class Client
      *
      * @param string $site_id _id value of the site to delete
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function delete_site(string $site_id): bool
     {
@@ -1747,7 +1997,7 @@ class Client
      * @note immediately after the change, the site is available in the output of the list_sites() function
      * @param string $site_name the new long name for the current site
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_site_name(string $site_name): bool
     {
@@ -1765,7 +2015,7 @@ class Client
      *                              returned by list_settings() for the section with the "country" key. Valid
      *                              country codes can be obtained using the list_country_codes() function/method.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_site_country(string $country_id, $payload): bool
     {
@@ -1788,7 +2038,7 @@ class Client
      *                              https://stackoverflow.com/questions/38399465/how-to-get-list-of-all-timezones-in-javascript
      *                              or in PHP using timezone_identifiers_list().
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_site_locale(string $locale_id, $payload): bool
     {
@@ -1808,7 +2058,7 @@ class Client
      *                              site. Must be a (partial) object/array structured in the same manner as is returned
      *                              by list_settings() for the section with the "snmp" key.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_site_snmp(string $snmp_id, $payload): bool
     {
@@ -1828,7 +2078,7 @@ class Client
      *                              site. Must be a (partial) object/array structured in the same manner as is returned
      *                              by list_settings() for the section with the "mgmt" key.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_site_mgmt(string $mgmt_id, $payload): bool
     {
@@ -1848,7 +2098,7 @@ class Client
      *                              to the site. Must be a (partial) object/array structured in the same manner
      *                              as is returned by list_settings() for the section with the "guest_access" key.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_site_guest_access(string $guest_access_id, $payload): bool
     {
@@ -1868,7 +2118,7 @@ class Client
      *                              site. Must be a (partial) object/array structured in the same manner as is returned
      *                              by list_settings() for the section with the "ntp" key.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_site_ntp(string $ntp_id, $payload): bool
     {
@@ -1888,7 +2138,7 @@ class Client
      *                              to the site. Must be a (partial) object/array structured in the same manner
      *                              as is returned by list_settings() for the section with the "connectivity" key.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_site_connectivity(string $connectivity_id, $payload): bool
     {
@@ -1904,7 +2154,7 @@ class Client
      * Fetch admins.
      *
      * @return array|bool containing administrator objects for selected site
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_admins()
     {
@@ -1917,7 +2167,7 @@ class Client
      * Fetch all admins.
      *
      * @return array|bool containing administrator objects for all sites
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_all_admins()
     {
@@ -1941,7 +2191,7 @@ class Client
      * @param bool $device_restart optional, whether the new admin has permissions to
      *                             restart devices, default value is false.
      * @return bool true on success
-     * @throws EmailInvalidException|Exception
+     * @throws EmailInvalidException|UnifiApiException
      */
     public function invite_admin(
         string $name,
@@ -1994,7 +2244,7 @@ class Client
      * @param bool $device_restart optional, whether the new admin has permissions to
      *                             restart devices, default value is false.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function assign_existing_admin(
         string $admin_id,
@@ -2041,7 +2291,7 @@ class Client
      * @param bool $device_restart optional, whether the new admin has permissions to
      *                             restart devices, default value is false.
      * @return bool true on success
-     * @throws EmailInvalidException|Exception
+     * @throws EmailInvalidException|UnifiApiException
      */
     public function update_admin(
         string $admin_id,
@@ -2096,7 +2346,7 @@ class Client
      * @param string $admin_id _id value of the admin to revoke, can be obtained using the
      *                         list_all_admins() method/function
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function revoke_admin(string $admin_id): bool
     {
@@ -2112,7 +2362,7 @@ class Client
      * @param string $admin_id _id value of the admin to delete, can be obtained using the
      *                         list_all_admins() method/function
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function delete_admin(string $admin_id): bool
     {
@@ -2127,7 +2377,7 @@ class Client
      * @param string $admin_id _id value of the admin to grant super admin, can be obtained using the
      *                         list_all_admins() method/function
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function grant_super_admin(string $admin_id): bool
     {
@@ -2140,7 +2390,7 @@ class Client
      * Fetch WLAN groups.
      *
      * @return array|bool containing known wlan_groups
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_wlan_groups()
     {
@@ -2151,7 +2401,7 @@ class Client
      * Fetch sysinfo.
      *
      * @return array containing known sysinfo data
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_sysinfo()
     {
@@ -2163,7 +2413,7 @@ class Client
      *
      * @note login is not required, except for UniFi OS-based controllers
      * @return bool true upon success (controller is online)
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_status(): bool
     {
@@ -2175,7 +2425,7 @@ class Client
      *
      * @note login is not required, except for UniFi OS-based controllers
      * @return bool|array status array upon success, false upon failure
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_full_status()
     {
@@ -2189,7 +2439,7 @@ class Client
      *
      * @note login is not required, except for UniFi OS-based controllers
      * @return bool|array mappings array upon success, false upon failure
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_device_name_mappings()
     {
@@ -2202,7 +2452,7 @@ class Client
      * Fetch self.
      *
      * @return array|bool containing information about the logged-in user
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_self()
     {
@@ -2214,7 +2464,7 @@ class Client
      *
      * @param int|null $create_time optional, create time of the vouchers to fetch in Unix timestamp in seconds
      * @return array|bool containing hotspot voucher objects
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_voucher(?int $create_time = null)
     {
@@ -2228,7 +2478,7 @@ class Client
      *
      * @param int|null $within optional, number of hours to go back to fetch payments
      * @return array|bool containing hotspot payments
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function stat_payment(?int $within = null)
     {
@@ -2244,7 +2494,7 @@ class Client
      * @param string $x_password clear text password for the hotspot operator
      * @param string $note optional, note to attach to the hotspot operator
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_hotspotop(string $name, string $x_password, string $note = ''): bool
     {
@@ -2260,7 +2510,7 @@ class Client
      * Fetch hotspot operators (using REST).
      *
      * @return array|bool containing hotspot operators
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_hotspotop()
     {
@@ -2281,7 +2531,7 @@ class Client
      * @param int|null $megabytes data transfer limit in MB
      * @return array|bool containing a single object/array which contains the create_time(stamp) of the voucher(s)
      *                    created, false upon failure
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_voucher(
         int    $minutes,
@@ -2324,7 +2574,7 @@ class Client
      *
      * @param string $voucher_id _id value of the voucher to revoke
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function revoke_voucher(string $voucher_id): bool
     {
@@ -2338,7 +2588,7 @@ class Client
      *
      * @param string $guest_id _id value of the guest to extend the authorization for
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function extend_guest_validity(string $guest_id): bool
     {
@@ -2350,7 +2600,7 @@ class Client
      * Fetch port forwarding stats.
      *
      * @return array|bool containing port forwarding stats
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_portforward_stats()
     {
@@ -2361,7 +2611,7 @@ class Client
      * Fetch DPI stats.
      *
      * @return array|bool containing DPI stats
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_dpi_stats()
     {
@@ -2376,7 +2626,7 @@ class Client
      * @param array|null $cat_filter optional, array containing numeric category ids to filter by,
      *                           only to be combined with a "by_app" value for $type
      * @return array|bool containing filtered DPI stats
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_dpi_stats_filtered(string $type = 'by_cat', ?array $cat_filter = null)
     {
@@ -2397,7 +2647,7 @@ class Client
      * Fetch current channels.
      *
      * @return array|bool containing currently allowed channels
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_current_channels()
     {
@@ -2411,7 +2661,7 @@ class Client
      * https://en.wikipedia.org/wiki/ISO_3166-1_numeric
      *
      * @return array|bool containing available country codes
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_country_codes()
     {
@@ -2422,7 +2672,7 @@ class Client
      * Fetch port forwarding settings.
      *
      * @return array|bool containing port forwarding settings
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_portforwarding()
     {
@@ -2433,7 +2683,7 @@ class Client
      * Fetch port configurations.
      *
      * @return array|bool containing port configurations
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_portconf()
     {
@@ -2444,7 +2694,7 @@ class Client
      * Fetch VoIP extensions.
      *
      * @return array|bool containing VoIP extensions
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_extension()
     {
@@ -2455,7 +2705,7 @@ class Client
      * Fetch site settings.
      *
      * @return array|bool containing site configuration settings
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_settings()
     {
@@ -2467,7 +2717,7 @@ class Client
      *
      * @param string|array $macs device MAC address or an array of MAC addresses
      * @return bool true on success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function adopt_device($macs): bool
     {
@@ -2494,7 +2744,7 @@ class Client
      * @param int $port optional, SSH port
      * @param bool $ssh_key_verify optional, if true, verify the SSH key for the device
      * @return bool true on success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function advanced_adopt_device(
         string $mac,
@@ -2528,7 +2778,7 @@ class Client
      * @param string|array $macs single device MAC address string or an array of MAC addresses
      * @param string $inform_url inform URL to point the device to (e.g., http://10.1.0.10:9080/inform)
      * @return bool true on success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function migrate_device($macs, string $inform_url): bool
     {
@@ -2550,7 +2800,7 @@ class Client
      *
      * @param string|array $macs single device MAC address string or an array of MAC addresses
      * @return bool true on success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function cancel_migrate_device($macs): bool
     {
@@ -2576,7 +2826,7 @@ class Client
      *                              capable ports. Keep in mind that a 'hard' reboot
      *                            - does *NOT* trigger a factory-reset.
      * @return bool true on success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function restart_device($macs, string $reboot_type = 'soft'): bool
     {
@@ -2602,7 +2852,7 @@ class Client
      * @note unclear whether this function is still supported across all controller versions
      * @param string|array $mac single device MAC address string or an array of MAC addresses
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function force_provision($mac): bool
     {
@@ -2635,7 +2885,7 @@ class Client
      *
      * @note this API call has no effect on UniFi controllers *not* running on a UniFi OS device
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function reboot_cloudkey(): bool
     {
@@ -2652,7 +2902,7 @@ class Client
      * @param string $ap_id value of _id for the access point which can be obtained from the device list
      * @param bool $disable true disables the device, false enables the device
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function disable_ap(string $ap_id, bool $disable): bool
     {
@@ -2671,7 +2921,7 @@ class Client
      *                              "on" enables the LED of the device,
      *                              "default" applies the site-wide setting for device LEDs
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function led_override(string $device_id, string $override_mode): bool
     {
@@ -2696,7 +2946,7 @@ class Client
      * @param string $mac device MAC address
      * @param bool $enable true enables flashing LED, false disables flashing LED
      * @return bool true on success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function locate_ap(string $mac, bool $enable): bool
     {
@@ -2714,7 +2964,7 @@ class Client
      *
      * @param bool $enable true switches LEDs of all the access points ON, false switches them OFF
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function site_leds(bool $enable): bool
     {
@@ -2734,7 +2984,7 @@ class Client
      * @param string $tx_power_mode power level, "low", "medium", or "high"
      * @param int $tx_power transmit power level, default=0
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_ap_radiosettings(string $ap_id, string $radio, int $channel, int $ht, string $tx_power_mode, int $tx_power): bool
     {
@@ -2758,7 +3008,7 @@ class Client
      * @param string $device_id _id value of the access point to be modified
      * @param string $group_id _id value of the WLAN group to assign device to
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_ap_wlangroup(string $type_id, string $device_id, string $group_id): bool
     {
@@ -2788,7 +3038,7 @@ class Client
      * @param string $section_id value of _id for the site settings section where key = "guest_access", settings
      *                                  can be obtained using the list_settings() function
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_guestlogin_settings(
         bool   $portal_enabled,
@@ -2824,7 +3074,7 @@ class Client
      *                              returned by list_settings() for the "guest_access" section.
      * @param string $section_id
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_guestlogin_settings_base($payload, string $section_id = ''): bool
     {
@@ -2845,7 +3095,7 @@ class Client
      *                              be a (partial) object/array structured in the same manner as is returned by
      *                              list_settings() for the "ips" section.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_ips_settings_base($payload): bool
     {
@@ -2861,7 +3111,7 @@ class Client
      *                              to apply, must be a (partial) object/array structured in the same manner as is
      *                              returned by list_settings() for the "super_mgmt" section.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_super_mgmt_settings_base(string $settings_id, $payload): bool
     {
@@ -2880,7 +3130,7 @@ class Client
      *                              apply, must be a (partial) object/array structured in the same manner as is
      *                              returned by list_settings() for the "super_smtp" section.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_super_smtp_settings_base(string $settings_id, $payload): bool
     {
@@ -2899,7 +3149,7 @@ class Client
      *                                  settings to apply, must be a (partial) object/array structured in the same
      *                                  manner as is returned by list_settings() for the "super_identity" section.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_super_identity_settings_base(string $settings_id, $payload): bool
     {
@@ -2915,7 +3165,7 @@ class Client
      * @param string $ap_id _id of the access point to rename
      * @param string $ap_name new name to assign to the access point
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function rename_ap(string $ap_id, string $ap_name): bool
     {
@@ -2930,7 +3180,7 @@ class Client
      * @param string $mac MAC address of the device to move
      * @param string $site_id _id (24 char string) of the site to move the device to
      * @return bool true on success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function move_device(string $mac, string $site_id): bool
     {
@@ -2950,7 +3200,7 @@ class Client
      *
      * @param string $mac MAC address of the device to delete
      * @return bool true on success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function delete_device(string $mac): bool
     {
@@ -2968,7 +3218,7 @@ class Client
      * Fetch dynamic DNS settings (using REST).
      *
      * @return array|bool containing dynamic DNS settings
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_dynamicdns()
     {
@@ -2982,7 +3232,7 @@ class Client
      *                              site, must be a (partial) object/array structured in the same manner as is returned
      *                              by list_dynamicdns() for the site.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_dynamicdns($payload): bool
     {
@@ -2997,7 +3247,7 @@ class Client
      *                              the site, must be a (partial) object/array structured in the same manner as is
      *                              returned by list_dynamicdns() for the site.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_dynamicdns(string $dynamicdns_id, $payload): bool
     {
@@ -3012,7 +3262,7 @@ class Client
      *
      * @param string $network_id optional, _id value of the network to get settings for
      * @return array|bool containing (non-wireless) networks and their settings
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_networkconf(string $network_id = '')
     {
@@ -3027,7 +3277,7 @@ class Client
      *                              list_networkconf() for the specific network type. Do not include the _id property,
      *                              it is assigned by the controller and returned upon success.
      * @return array|bool containing a single object with details of the new network on success, else returns false
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_network($payload)
     {
@@ -3042,7 +3292,7 @@ class Client
      *                              the network, must be a (partial) object/array structured in the same manner as
      *                              is returned by list_networkconf() for the network.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_networksettings_base(string $network_id, $payload): bool
     {
@@ -3057,7 +3307,7 @@ class Client
      *
      * @param string $network_id _id value of the network which can be found with the list_networkconf() function
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function delete_network(string $network_id): bool
     {
@@ -3072,7 +3322,7 @@ class Client
      * @param string $wlan_id optional, _id value of the wlan to fetch the settings for
      * @return array|bool containing wireless networks and their settings, or an array containing a single wireless network
      *                    when using the <wlan_id> parameter
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_wlanconf(string $wlan_id = '')
     {
@@ -3103,7 +3353,7 @@ class Client
      *                                  and higher
      * @param array $payload optional, array of additional parameters (wlan_bands, wpa3_support, etc.)
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_wlan(
         string  $name,
@@ -3163,7 +3413,7 @@ class Client
      *                              wlan, must be a (partial) object/array structured in the same manner as is returned
      *                              by list_wlanconf() for the wlan.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_wlansettings_base(string $wlan_id, $payload): bool
     {
@@ -3180,7 +3430,7 @@ class Client
      *                             is ignored if set to null
      * @param string $name optional, SSID
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_wlansettings(string $wlan_id, string $x_passphrase, string $name = ''): bool
     {
@@ -3200,7 +3450,7 @@ class Client
      * @param string $wlan_id the "_id" value for the WLAN which can be found with the list_wlanconf() function
      * @param bool $disable true disables the wlan, false enables it
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function disable_wlan(string $wlan_id, bool $disable): bool
     {
@@ -3215,7 +3465,7 @@ class Client
      *
      * @param string $wlan_id the "_id" value for the WLAN which can be found with the list_wlanconf() function
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function delete_wlan(string $wlan_id): bool
     {
@@ -3232,7 +3482,7 @@ class Client
      * @param array $macs must contain valid MAC strings to be placed in the MAC filter list,
      *                    replacing existing values. Existing MAC filter list can be obtained through list_wlanconf().
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_wlan_mac_filter(string $wlan_id, string $mac_filter_policy, bool $mac_filter_enabled, array $macs): bool
     {
@@ -3254,12 +3504,15 @@ class Client
     /**
      * Fetch events.
      *
+     * @note Network Application 11.x removed this endpoint, the controller answers with HTTP 404 (api.err.NotFound)
+     *       and this method throws a ControllerErrorException. Use get_system_log('all') instead, optionally
+     *       filtered by category through the $custom_payload parameter.
      * @param integer $historyhours optional, hours to go back, default value is 720 hours
      * @param integer $start optional, which event number to start with (useful for paging of results), default
      *                       value is 0
      * @param integer $limit optional, number of events to return, default value is 3000
      * @return array|bool containing known events
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_events(int $historyhours = 720, int $start = 0, int $limit = 3000)
     {
@@ -3277,11 +3530,13 @@ class Client
     /**
      * Fetch alarms.
      *
+     * @note Network Application 11.x removed this endpoint, the controller answers with HTTP 400 (api.err.InvalidObject)
+     *       and this method throws a ControllerErrorException. Use get_system_log('critical') instead.
      * @param array $payload optional, array of flags to filter by
      *                       Example: ["archived" => false, "key" => "EVT_GW_WANTransition"]
      *                       return only unarchived for a specific key
      * @return array|bool containing known alarms
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_alarms(array $payload = [])
     {
@@ -3291,10 +3546,13 @@ class Client
     /**
      * Count alarms.
      *
+     * @note Network Application 11.x removed this endpoint, the controller answers with HTTP 400 (api.err.InvalidObject)
+     *       and this method throws a ControllerErrorException. Use get_system_log('critical') and its
+     *       'total_element_count' instead.
      * @param bool|null $archived optional, if true all alarms are counted, if false only non-archived (active) alarms are
      *                            counted, by default all alarms are counted
      * @return array|bool containing the alarm count
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function count_alarms(?bool $archived = null)
     {
@@ -3306,10 +3564,12 @@ class Client
     /**
      * Archive alarms(s).
      *
+     * @note Network Application 11.x removed the alarm endpoints (see list_alarms()), expect this method to fail there
+     *       as well.
      * @param string $alarm_id optional, _id of the alarm to archive which can be found with the list_alarms() function,
      *                         by default all alarms are archived
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function archive_alarm(string $alarm_id = ''): bool
     {
@@ -3325,10 +3585,13 @@ class Client
     /**
      * Check controller update.
      *
-     * @note triggers an update of the controller's cached, latest known version.
+     * @note - triggers an update of the controller's cached, latest known version.
+     *       - Network Application 11.x removed this endpoint, the controller answers with HTTP 404 (api.err.NotFound)
+     *         and this method throws a ControllerErrorException. The 'update_available' and 'update_downloaded'
+     *         properties returned by stat_sysinfo() remain available
      * @return array|bool returns an array with a single object containing details of the current known latest
      *                    controller version info on success, else returns false
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function check_controller_update()
     {
@@ -3336,11 +3599,11 @@ class Client
     }
 
     /**
-     * Get the recent firmware update for an UniFi-OS console
+     * Get the recent firmware update for an UniFi-OS console.
      *
      * @return array|bool returns an array with a single object containing details of the current known latest
      *                    UniFi OS version info on success, else returns false
-     * @throws Exception
+     * @throws NotAUnifiOsConsoleException|UnifiApiException
      */
     public function get_update_os_console()
     {
@@ -3352,11 +3615,11 @@ class Client
     }
 
     /**
-     * Update the OS for an UniFi-OS console
+     * Update the OS for an UniFi-OS console.
      *
      * @note triggers an UniFi OS Update in Control Plane > Updates > UniFi OS
      * @return bool true upon success
-     * @throws Exception
+     * @throws NotAUnifiOsConsoleException|UnifiApiException
      */
     public function update_os_console(): bool
     {
@@ -3370,11 +3633,28 @@ class Client
     }
 
     /**
+     * Reboot an UniFi-OS console.
+     *
+     * @return bool true upon success
+     * @throws NotAUnifiOsConsoleException|UnifiApiException
+     */
+    public function reboot_os_console(): bool
+    {
+        if (!$this->is_unifi_os) {
+            throw new NotAUnifiOsConsoleException();
+        }
+
+        $this->curl_method = 'POST';
+
+        return $this->fetch_results_boolean('/api/system/reboot', null, true, false);
+    }
+
+    /**
      * Check firmware update.
      *
      * @note triggers a Device Firmware Update in Classic Settings > System settings > Maintenance
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function check_firmware_update(): bool
     {
@@ -3389,7 +3669,7 @@ class Client
      * @note updates the device to the latest STABLE firmware known to the controller
      * @param string $mac MAC address of the device to upgrade
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function upgrade_device(string $mac): bool
     {
@@ -3404,7 +3684,7 @@ class Client
      * @note updates all devices of the selected type to the latest STABLE firmware known to the controller
      * @param string $type the type of devices to upgrade, must be one of "uap", "usw", "ugw". "uap" is the default.
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function upgrade_all_devices(string $type = 'uap'): bool
     {
@@ -3421,7 +3701,7 @@ class Client
      * @param string $firmware_url URL for the firmware file to upgrade the device to
      * @param string|array $macs MAC address of the device to upgrade or an array of MAC addresses
      * @return bool true upon success
-     * @throws Exception|MacAddressEmptyException|MacAddressInvalidException
+     * @throws UnifiApiException|MacAddressEmptyException|MacAddressInvalidException
      */
     public function upgrade_device_external(string $firmware_url, $macs): bool
     {
@@ -3444,7 +3724,7 @@ class Client
      *       staggered/rolling fashion
      * @param array $payload optional, array of device types to upgrade, default is all device types
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function start_rolling_upgrade(array $payload = ['uap', 'usw', 'ugw', 'uxg']): bool
     {
@@ -3455,7 +3735,7 @@ class Client
      * Cancel a rolling upgrade.
      *
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function cancel_rolling_upgrade(): bool
     {
@@ -3470,7 +3750,7 @@ class Client
      * @param string $type optional, "available" or "cached", determines which firmware types to return,
      *                     default value is "available"
      * @return array|bool containing firmware versions
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_firmware(string $type = 'available')
     {
@@ -3491,7 +3771,7 @@ class Client
      * @param string $mac main MAC address of the switch
      * @param int $port_idx port number/index of the port to be affected
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function power_cycle_switch_port(string $mac, int $port_idx): bool
     {
@@ -3505,7 +3785,7 @@ class Client
      *
      * @param string $mac MAC address of the AP
      * @return bool true upon success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function spectrum_scan(string $mac): bool
     {
@@ -3519,7 +3799,7 @@ class Client
      * @param string $mac MAC address of the AP
      * @return array|bool containing relevant information (results if available) regarding the RF scanning state of the
      *                    AP
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function spectrum_scan_state(string $mac)
     {
@@ -3534,7 +3814,7 @@ class Client
      *                              device, must be a (partial) object/array structured in the same manner as is returned
      *                              by list_devices() for the device.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_device_settings_base(string $device_id, $payload): bool
     {
@@ -3547,7 +3827,7 @@ class Client
      * Fetch Radius profiles (using REST).
      *
      * @return array|bool objects containing all Radius profiles for the current site
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_radius_profiles()
     {
@@ -3558,7 +3838,7 @@ class Client
      * Fetch Radius user accounts (using REST).
      *
      * @return array|bool objects containing all Radius accounts for the current site
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_radius_accounts()
     {
@@ -3602,7 +3882,7 @@ class Client
      *                                     15     E.164 with NSAP format subaddress
      * @param string|null $vlan optional, VLAN to assign to the account
      * @return bool|array containing a single object for the newly created account upon success, else returns false
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function create_radius_account(
         string  $name,
@@ -3651,7 +3931,7 @@ class Client
      *                              account, must be a (partial) object/array structured in the same manner as is
      *                              returned by list_radius_accounts() for the account.
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_radius_account_base(string $account_id, $payload): bool
     {
@@ -3665,7 +3945,7 @@ class Client
      *
      * @param string $account_id _id of the account which can be found with the list_radius_accounts() function
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function delete_radius_account(string $account_id): bool
     {
@@ -3680,7 +3960,7 @@ class Client
      *                        'reset-dpi', resets all DPI counters for the current site,
      *                        to be extended in the future
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function cmd_stat(string $command): bool
     {
@@ -3698,7 +3978,7 @@ class Client
      *
      * @param bool $enable true enables Element Adoption, false disables Element Adoption
      * @return bool true on success
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function set_element_adoption(bool $enable): bool
     {
@@ -3712,9 +3992,16 @@ class Client
      *
      * @note - defaults to the past 7*24 hours
      *       - results are paged; use $page_number to iterate over pages and $page_size to set page size
+     *       - 'all' returns every entry regardless of class and can be narrowed with a 'categories' array in
+     *         $custom_payload, e.g. ['categories' => ['CLIENT_DEVICES', 'INTERNET_AND_WAN']]; known categories are
+     *         'AUDIT', 'CLIENT_DEVICES', 'SOFTWARE_UPDATES', 'INTERNET_AND_WAN'. Entries carry 'category',
+     *         'key', 'severity', 'message_raw', 'parameters' and 'timestamp' (milliseconds)
+     *       - on Network Application 11.x 'all' replaces list_events(), 'threat-alert' replaces stat_ips_events()
+     *         and 'critical' replaces list_alarms(); the 'triggers' class no longer exists there (HTTP 404)
      * @param string $class optional, class of the system log entries to fetch, known valid values:
-     *                      'device-alert', 'next-ai-alert', 'vpn-alert', 'admin-activity', 'update-alert',
-     *                      'client-alert', 'threat-alert', 'triggers', default value is 'device-alert'
+     *                      'all', 'critical', 'device-alert', 'next-ai-alert', 'vpn-alert', 'admin-activity',
+     *                      'update-alert', 'client-alert', 'threat-alert', 'triggers' (Network Application 10.x and
+     *                      older only), default value is 'device-alert'
      * @param ?int $start optional, start time in milliseconds since the Unix epoch
      * @param ?int $end optional, end time in milliseconds since the Unix epoch
      * @param int $page_number optional, page number to fetch, default value is 0 (first page)
@@ -3725,7 +4012,7 @@ class Client
      *               The 'data' key in the returned array contains the actual system log entries.
      *               The returned array also contains the page number and size, and the total number of entries
      *               available.
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function get_system_log(string $class = 'device-alert', ?int $start = null, ?int $end = null, int $page_number = 0, int $page_size = 100, array $custom_payload = [])
     {
@@ -3769,7 +4056,7 @@ class Client
      * Get a list of all DNS records.
      *
      * @return array|null The list of DNS records, or null on failure.
-     * @throws Exception If the request fails.
+     * @throws UnifiApiException If the request fails.
      */
     public function list_dns_records(): ?array
     {
@@ -3784,13 +4071,14 @@ class Client
      * @param string $key The domain name or subdomain for the DNS record.
      * @param int|null $ttl Time-to-Live value for the record (leave null to set to "auto").
      * @param bool $enabled Whether the DNS record is enabled.
-     * @throws Exception If the request fails.
+     * @throws InvalidArgumentException If an unsupported record type is provided.
+     * @throws UnifiApiException If the request fails.
      * @return object|null The response from the API, or null on failure.
      */
     public function create_dns_record(string $record_type, string $value, string $key, ?int $ttl = null, bool $enabled = true): ?object
     {
         if (!in_array($record_type, ['A', 'AAAA', 'MX', 'TXT', 'SRV', 'NS'])) {
-            throw new Exception('Invalid record type: ' . $record_type);
+            throw new InvalidArgumentException('Invalid record type: ' . $record_type);
         }
 
         $payload = [
@@ -3812,7 +4100,7 @@ class Client
      *
      * @param string $record_id The ID of the DNS record to delete.
      * @return bool True if the deletion was successful, false otherwise.
-     * @throws Exception If the request fails.
+     * @throws UnifiApiException If the request fails.
      */
     public function delete_dns_record(string $record_id): bool
     {
@@ -3827,7 +4115,7 @@ class Client
      * @note This endpoint is available in Network Application/Controller version 9.2.x onwards.
      * @return object|null An object, or null on failure. The `model_list` property of the `results` object contains an
      *                     array of device models.
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function list_models(): ?object
     {
@@ -3870,7 +4158,7 @@ class Client
      *                       return a boolean result or "array" when the method must return an array (default)
      * @param bool $prefix_path optional, determines if the path should be prefixed for UniFi OS consoles
      * @return bool|array returns results as requested, returns false on incorrect parameters
-     * @throws Exception
+     * @throws UnifiApiException
      */
     public function custom_api_request(string $path, string $method = 'GET', $payload = null, string $return = 'array', bool $prefix_path = true)
     {
@@ -4211,6 +4499,136 @@ class Client
     }
 
     /**
+     * Enable API key authentication. When set, the client uses stateless API key auth instead of
+     * username/password login. API keys are only supported on UniFi OS-based controllers.
+     *
+     * @param string $api_key the API key generated in the UniFi OS console
+     * @throws InvalidArgumentException when an empty API key is provided
+     */
+    public function set_api_key(string $api_key): void
+    {
+        $api_key = trim($api_key);
+        if (empty($api_key)) {
+            throw new InvalidArgumentException('API key cannot be empty');
+        }
+
+        $this->api_key      = $api_key;
+        $this->is_unifi_os  = true;
+        $this->is_logged_in = true;
+    }
+
+    /**
+     * Get the current API key value.
+     *
+     * @return string the current API key, empty string if not set
+     */
+    public function get_api_key(): string
+    {
+        return $this->api_key;
+    }
+
+    /**
+     * Check whether the client is using API key authentication.
+     *
+     * @return bool true when API key mode is active
+     */
+    protected function is_api_key_mode(): bool
+    {
+        return !empty($this->api_key);
+    }
+
+    /**
+     * Create a Client instance configured for Site Manager proxy mode.
+     *
+     * All API requests are routed through the Ubiquiti Site Manager cloud proxy at api.ui.com
+     * instead of connecting directly to a controller. No login() call is needed.
+     *
+     * @note The console must be online, running firmware >= 5.0.3, and accessible to the API key owner.
+     *       Non-organization API keys can only access the key owner's consoles.
+     *       Organization API keys can access any console within the organization.
+     * @param string $console_id the console host ID, visible in the unifi.ui.com URL:
+     *                           https://unifi.ui.com/consoles/{console_id}/network/default/dashboard
+     * @param string $api_key Site Manager API key (not the local controller API key)
+     * @param string $site optional, short site name, defaults to 'default'
+     * @return static a fully configured proxy-mode client instance
+     * @throws InvalidArgumentException when $console_id or $api_key is empty
+     */
+    public static function connect_via_site_manager(string $console_id, string $api_key, string $site = 'default')
+    {
+        $instance = new static('', '', 'https://127.0.0.1:8443', $site);
+        $instance->enable_site_manager_proxy($console_id, $api_key);
+
+        return $instance;
+    }
+
+    /**
+     * Enable Site Manager proxy mode.
+     *
+     * When enabled, all API requests are routed through the Ubiquiti Site Manager cloud proxy
+     * (api.ui.com) using the connector endpoint. The client becomes stateless — no login/logout
+     * or CSRF token management is needed.
+     *
+     * @note The console must be online, running firmware >= 5.0.3, and accessible to the API key owner.
+     * @param string $console_id the console host ID
+     * @param string $api_key Site Manager API key
+     * @throws InvalidArgumentException when $console_id or $api_key is empty
+     */
+    public function enable_site_manager_proxy(string $console_id, string $api_key): void
+    {
+        $console_id = trim($console_id);
+        $api_key    = trim($api_key);
+
+        if (empty($console_id)) {
+            throw new InvalidArgumentException('Console ID cannot be empty');
+        }
+
+        if (empty($api_key)) {
+            throw new InvalidArgumentException('Site Manager API key cannot be empty');
+        }
+
+        $this->is_site_manager_proxy   = true;
+        $this->site_manager_console_id = $console_id;
+        $this->site_manager_api_key    = $api_key;
+        $this->is_unifi_os             = true;
+        $this->is_logged_in            = true;
+    }
+
+    /**
+     * Disable Site Manager proxy mode.
+     *
+     * After disabling, the client must be re-configured (login, set_api_key, etc.) before
+     * making direct API calls.
+     */
+    public function disable_site_manager_proxy(): void
+    {
+        $this->is_site_manager_proxy   = false;
+        $this->site_manager_console_id = '';
+        $this->site_manager_api_key    = '';
+        $this->is_unifi_os             = false;
+        $this->is_logged_in            = false;
+    }
+
+    /**
+     * Check whether Site Manager proxy mode is enabled.
+     *
+     * @return bool true when proxy mode is active
+     */
+    public function is_site_manager_proxy_enabled(): bool
+    {
+        return $this->is_site_manager_proxy;
+    }
+
+    /**
+     * Get the current Site Manager console ID.
+     *
+     * @return string the console ID, empty string if not set
+     */
+    public function get_site_manager_console_id(): string
+    {
+        return $this->site_manager_console_id;
+    }
+
+    /**
      * Set value for the private property $connect_timeout.
      *
      * @param int $timeout new value for $connect_timeout in seconds
@@ -4300,7 +4718,10 @@ class Client
      * @param boolean $login_required optional, whether the method requires to be logged in or not
      * @param bool $prefix_path optional, determines if the path should be prefixed for UniFi OS consoles
      * @return bool|array|object returns an array with the "data" array on success, returns boolean if $boolean is true
-     * @throws Exception
+     * @throws LoginRequiredException when login is required but the client is not logged in
+     * @throws ControllerErrorException when the controller returns an error in its response
+     * @throws JsonDecodeException when the response cannot be decoded
+     * @throws CurlGeneralErrorException|CurlTimeoutException|LoginFailedException|ConsoleOfflineException
      */
     protected function fetch_results(
         string $path,
@@ -4345,7 +4766,7 @@ class Client
                         $this->last_error_message = $response->meta->msg;
                     }
 
-                    throw new Exception('Error message: ' . $this->last_error_message);
+                    throw new ControllerErrorException('Error message: ' . $this->last_error_message, $this->last_error_message, $response);
                 }
             }
 
@@ -4357,7 +4778,7 @@ class Client
                         $this->last_error_message = $response->message;
                     }
 
-                    throw new Exception('Error code: ' . $response->errorCode . ', message: ' . $this->last_error_message);
+                    throw new ControllerErrorException('Error code: ' . $response->errorCode . ', message: ' . $this->last_error_message, $response->errorCode, $response);
                 }
 
                 return $response;
@@ -4371,7 +4792,7 @@ class Client
                         $this->last_error_message = $response->message;
                     }
 
-                    throw new Exception('Error code: ' . $response->code . ', message: ' . $this->last_error_message);
+                    throw new ControllerErrorException('Error code: ' . $response->code . ', message: ' . $this->last_error_message, $response->code, $response);
                 }
 
                 if (is_object($response) && !$boolean) {
@@ -4393,8 +4814,8 @@ class Client
      *                                   request
      * @param bool $login_required optional, whether the method requires to be logged in or not
      * @param bool $prefix_path optional, determines if the path should be prefixed for UniFi OS consoles
-     * @return bool [description]
-     * @throws Exception
+     * @return bool true on success
+     * @throws UnifiApiException see fetch_results()
      */
     protected function fetch_results_boolean(
         string $path,
@@ -4583,6 +5004,24 @@ class Client
     }
 
     /**
+     * Decompress a response body that is gzip-compressed without a Content-Encoding header, as delivered by the
+     * Site Manager connector for a UniFi OS Server that compresses its replies. Any other body is returned as is.
+     *
+     * @param string $response the raw response body
+     * @return string the decompressed body, or the original body when it is not a gzip stream
+     */
+    protected function decode_gzip_body(string $response): string
+    {
+        if (substr($response, 0, 2) !== "\x1f\x8b") {
+            return $response;
+        }
+
+        $decoded = @gzdecode($response);
+
+        return $decoded === false ? $response : $decoded;
+    }
+
+    /**
      * Callback function for cURL to extract and store cookies as needed.
      *
      * @param object|resource|false $ch the cURL instance (type hinting is unavailable for cURL resources)
@@ -4626,7 +5065,7 @@ class Client
      * @param object|array|null $payload optional, payload to pass with the request
      * @param bool $prefix_path optional, determines if the path should be prefixed for UniFi OS consoles
      * @return bool|string response returned by the controller API
-     * @throws CurlGeneralErrorException|CurlTimeoutException|InvalidCurlMethodException|LoginFailedException
+     * @throws CurlGeneralErrorException|CurlTimeoutException|InvalidCurlMethodException|LoginFailedException|ConsoleOfflineException
      */
     protected function exec_curl(string $path, $payload = null, $prefix_path = true)
     {
@@ -4634,10 +5073,19 @@ class Client
             throw new InvalidCurlMethodException();
         }
 
-        $url = $this->baseurl . $path;
+        if ($this->is_site_manager_proxy) {
+            $connector_base = self::SITE_MANAGER_BASE_URL
+                            . '/v1/connector/consoles/' . $this->site_manager_console_id;
 
-        if ($this->is_unifi_os && $prefix_path) {
+            if ($prefix_path) {
+                $url = $connector_base . '/network' . $path;
+            } else {
+                $url = $connector_base . $path;
+            }
+        } elseif ($this->is_unifi_os && $prefix_path) {
             $url = $this->baseurl . '/proxy/network' . $path;
+        } else {
+            $url = $this->baseurl . $path;
         }
 
         $ch = $this->get_curl_handle();
@@ -4676,13 +5124,38 @@ class Client
                 break;
         }
 
-        if ($this->is_unifi_os && $this->curl_method !== 'GET') {
+        if (!$this->is_api_key_mode() && !$this->is_site_manager_proxy && $this->is_unifi_os && $this->curl_method !== 'GET') {
             $this->create_x_csrf_token_header();
+        }
+
+        /** Inject the appropriate API key header. Site Manager proxy takes precedence. */
+        if ($this->is_site_manager_proxy) {
+            foreach ($this->curl_headers as $index => $header) {
+                if (stripos($header, 'x-api-key:') !== false) {
+                    unset($this->curl_headers[$index]);
+                }
+            }
+
+            $this->curl_headers[] = 'X-API-KEY: ' . $this->site_manager_api_key;
+        } elseif ($this->is_api_key_mode()) {
+            foreach ($this->curl_headers as $index => $header) {
+                if (stripos($header, 'x-api-key:') !== false) {
+                    unset($this->curl_headers[$index]);
+                }
+            }
+
+            $this->curl_headers[] = 'X-API-KEY: ' . $this->api_key;
         }
 
         $curl_options[CURLOPT_HTTPHEADER] = $this->curl_headers;
 
         curl_setopt_array($ch, $curl_options);
+
+        /** In proxy mode, enforce SSL verification for api.ui.com (valid public CA certificate). */
+        if ($this->is_site_manager_proxy) {
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        }
 
         /** Execute the cURL request. */
         $response = curl_exec($ch);
@@ -4700,10 +5173,41 @@ class Client
         }
 
         /**
+         * The Site Manager connector passes the console's body through unchanged. Some UniFi OS Servers compress
+         * their JSON replies and the connector drops the Content-Encoding header, so cURL cannot decode them.
+         * Decompress such gzip bodies ourselves, in proxy mode only.
+         */
+        if ($this->is_site_manager_proxy && is_string($response)) {
+            $response = $this->decode_gzip_body($response);
+        }
+
+        /** In proxy mode, HTTP 408 means the console is offline or unreachable. */
+        if ($http_code === 408 && $this->is_site_manager_proxy) {
+            throw new ConsoleOfflineException(
+                'Console did not respond via the Site Manager proxy (HTTP 408). The console may be offline or running firmware < 5.0.3.',
+                $http_code
+            );
+        }
+
+        /**
          * An HTTP response code 401 (Unauthorized) indicates the Cookie/Token has expired, in which case
          * re-login is required.
          */
         if ($http_code === 401) {
+            if ($this->is_site_manager_proxy) {
+                throw new LoginFailedException(
+                    'Site Manager API key rejected (HTTP 401). Verify the key is valid and has access to this console.',
+                    $http_code
+                );
+            }
+
+            if ($this->is_api_key_mode()) {
+                throw new LoginFailedException(
+                    'API key rejected by the controller (HTTP 401). Verify the key is valid and has the required permissions.',
+                    $http_code
+                );
+            }
+
             if ($this->debug) {
                 error_log(__FUNCTION__ . ': need to re-login to UniFi controller');
             }

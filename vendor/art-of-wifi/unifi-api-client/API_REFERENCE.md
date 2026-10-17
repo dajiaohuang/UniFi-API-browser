@@ -89,6 +89,67 @@ Logs out from the UniFi controller.
 - `CurlGeneralErrorException`
 - `CurlTimeoutException`
 
+### Connect via Site Manager
+```php
+public static function connect_via_site_manager(string $console_id, string $api_key, string $site = 'default')
+```
+Creates a Client instance configured for Site Manager proxy mode. All API requests are routed through the Ubiquiti Site Manager cloud proxy at `api.ui.com` instead of connecting directly to a controller. No `login()` call is needed.
+
+**Parameters:**
+- `$console_id` (string): Console host ID, visible in the `unifi.ui.com` URL: `https://unifi.ui.com/consoles/{console_id}/network/default/dashboard`
+- `$api_key` (string): Site Manager API key (not the local controller API key)
+- `$site` (string): Short site name (default: 'default')
+
+**Returns:** Client instance configured for proxy mode
+
+**Throws:**
+- `InvalidArgumentException` when `$console_id` or `$api_key` is empty
+- `CurlExtensionNotLoadedException`
+- `InvalidSiteNameException`
+
+**Notes:**
+- The console must be online, running firmware >= 5.0.3, and accessible to the API key owner
+- Non-organization API keys can only access the key owner's consoles
+- Organization API keys can access any console within the organization
+- All 200+ API methods work transparently through the proxy
+
+### Enable Site Manager Proxy
+```php
+public function enable_site_manager_proxy(string $console_id, string $api_key): void
+```
+Enables Site Manager proxy mode on an existing client instance. When enabled, all API requests are routed through the Site Manager cloud proxy.
+
+**Parameters:**
+- `$console_id` (string): Console host ID
+- `$api_key` (string): Site Manager API key
+
+**Throws:**
+- `InvalidArgumentException` when `$console_id` or `$api_key` is empty
+
+### Disable Site Manager Proxy
+```php
+public function disable_site_manager_proxy(): void
+```
+Disables Site Manager proxy mode. After disabling, the client must be re-configured (`login()`, `set_api_key()`, etc.) before making direct API calls. Resets `$is_logged_in` and `$is_unifi_os` to `false`.
+
+### Is Site Manager Proxy Enabled
+```php
+public function is_site_manager_proxy_enabled(): bool
+```
+Checks whether Site Manager proxy mode is currently enabled.
+
+**Returns:** bool - true when proxy mode is active
+
+### Get Site Manager Console ID
+```php
+public function get_site_manager_console_id(): string
+```
+Gets the current Site Manager console ID.
+
+**Returns:** string - Console ID, empty string if not set
+
+---
+
 ## Client Management
 
 ### List Clients
@@ -951,6 +1012,8 @@ Lists dashboard information.
 
 **Returns:** array - Array containing dashboard information
 
+> **Network Application 11.x:** endpoint removed (HTTP 404, `ControllerErrorException`). Use `list_aggregated_dashboard()`.
+
 ## Device Management
 
 ### List Devices Basic
@@ -1159,6 +1222,8 @@ Checks for controller software updates.
 
 **Returns:** array - Update information
 
+> **Network Application 11.x:** endpoint removed (HTTP 404, `ControllerErrorException`). `stat_sysinfo()` still reports `update_available` and `update_downloaded`.
+
 ### Get UniFi OS Console Update
 ```php
 public function get_update_os_console(): array
@@ -1343,6 +1408,8 @@ Lists system events.
 
 **Returns:** array - Array of event objects
 
+> **Network Application 11.x:** endpoint removed (HTTP 404, `ControllerErrorException`). Use `get_system_log('all')`, optionally with `['categories' => [...]]` in `$custom_payload`.
+
 ### List Alarms
 ```php
 public function list_alarms(array $payload = []): array
@@ -1353,6 +1420,8 @@ Lists alarms.
 - `$payload` (array): Optional filter parameters
 
 **Returns:** array - Array of alarm objects
+
+> **Network Application 11.x:** endpoint removed (HTTP 400 `api.err.InvalidObject`, `ControllerErrorException`). Use `get_system_log('critical')`.
 
 ### Count Alarms
 ```php
@@ -1365,6 +1434,8 @@ Counts alarms.
 
 **Returns:** int - Number of alarms
 
+> **Network Application 11.x:** endpoint removed (HTTP 400 `api.err.InvalidObject`, `ControllerErrorException`). Use the `total_element_count` of `get_system_log('critical')`.
+
 ### Archive Alarm
 ```php
 public function archive_alarm(string $alarm_id = ''): bool
@@ -1375,6 +1446,8 @@ Archives an alarm.
 - `$alarm_id` (string): ID of the alarm to archive (empty to archive all)
 
 **Returns:** bool - true upon success
+
+> **Network Application 11.x:** the alarm endpoints were removed, expect this method to fail there as well.
 
 ## Backup Management
 
@@ -1909,14 +1982,16 @@ public function get_system_log(
 Retrieves system logs.
 
 **Parameters:**
-- `$class` (string): Log class to retrieve (default: 'device-alert')
-- `$start` (int|null): Start timestamp
-- `$end` (int|null): End timestamp
+- `$class` (string): Log class to retrieve: `'all'`, `'critical'`, `'device-alert'`, `'next-ai-alert'`, `'vpn-alert'`, `'admin-activity'`, `'update-alert'`, `'client-alert'`, `'threat-alert'`, `'triggers'` (10.x and older only) (default: 'device-alert')
+- `$start` (int|null): Start timestamp in milliseconds
+- `$end` (int|null): End timestamp in milliseconds
 - `$page_number` (int): Page number for pagination (default: 0)
 - `$page_size` (int): Number of entries per page (default: 100)
-- `$custom_payload` (array): Additional custom parameters
+- `$custom_payload` (array): Additional custom parameters, e.g. `['categories' => ['CLIENT_DEVICES', 'INTERNET_AND_WAN']]` to narrow `'all'`
 
-**Returns:** array - Array of log entries
+**Returns:** array - Object with `data` (log entries carrying `category`, `key`, `severity`, `message_raw`, `parameters`, `timestamp`), `page_number`, `total_element_count` and `total_page_count`
+
+> **Network Application 11.x:** `'all'` replaces `list_events()`, `'threat-alert'` replaces `stat_ips_events()` and `'critical'` replaces `list_alarms()`; the `'triggers'` class no longer exists (HTTP 404).
 
 ### List Models
 ```php
@@ -1951,6 +2026,88 @@ Makes a custom API request to the controller.
 
 ## Statistics
 
+> **Network Application 11.x:** the controller moved all time-series statistics to a new statistics engine
+> and no longer populates the `stat/report/*` endpoints behind the Site, Access Point, User, Gateway and
+> Speed Test methods below. On 11.x those methods still answer, but always with an empty array. Use
+> `get_stats_source()` to detect which engine a controller uses (`LEGACY` on 10.x, `MODERN` on 11.x, a
+> `JsonDecodeException` on 9.x and older which lack the endpoint) and call `stat_series()` on `MODERN`
+> controllers. History does not carry over: the new store starts at the moment of the 11.x upgrade.
+
+### Statistics Source
+```php
+public function get_stats_source(): string
+```
+Returns which statistics engine the controller uses. Requires Network Application 10.x or later.
+
+**Returns:** string - `'LEGACY'` (10.x, `stat/report/*` populated) or `'MODERN'` (11.x and later, use `stat_series()`)
+
+**Throws:** `JsonDecodeException` on controllers older than 10.x (the endpoint does not exist and the controller answers with an HTML page)
+
+### Statistics Schemas
+```php
+public function list_stat_schemas(): array
+```
+Lists the schemas accepted by `stat_series()`. Requires Network Application 11.x.
+
+**Returns:** array - Array of schema objects with `name`, `keys` (e.g. `siteId`, `deviceMac`, `clientId`), `values` (the value fields a bucket can contain) and `nested` groups (each with `name`, `keys` and `values`)
+
+Schemas on 11.0.83/11.0.89: `activityBySiteByClient`, `applicationTrafficBySite`, `applicationTrafficBySiteByClient`, `bridgeBySiteByDevice`, `clientCountBySite`, `clientCountBySiteByDevice`, `countryTrafficBySite`, `lteBySiteByDevice`, `metricsBySiteByWanByIsp`, `outletBySiteByDevice`, `portBySiteByDevice`, `portTrafficBySiteByDevice`, `roamBySiteByClient`, `roamBySiteByDevice`, `systemBySiteByDevice`, `trafficFlowBySiteBase`, `trafficFlowBySiteExtended`, `vpnActivityBySiteByClient`, `wanBySite`, `wanBySiteByDevice`, `wanTrafficBySiteByClient`, `wirelessAnalyticsBySiteByDevice`, `wirelessBySite`, `wirelessBySiteByDevice`, `wirelessClientCountBySite`, `wirelessConnectivityAnalyticsBySiteByDevice`, `wirelessConnectivityBySite`, `wirelessTrafficBySiteByDevice`.
+
+### Statistics Series
+```php
+public function stat_series(
+    string $schema,
+    ?string $period = null,
+    ?int $end = null,
+    ?int $start = null,
+    ?string $filter = null,
+    ?string $projection = null,
+    bool $no_gaps = false
+): array
+```
+Retrieves a statistics time series from the Network Application 11.x statistics engine.
+
+**Parameters:**
+- `$schema` (string): Schema name, see `list_stat_schemas()`
+- `$period` (string|null): `'HOUR'`, `'DAY'`, `'WEEK'` or `'MONTH'`; the window is the period ending at `$end`. `HOUR` and `DAY` return 5-minute buckets, `WEEK` hourly buckets, `MONTH` 8-hour buckets. Defaults to `'DAY'` when `$start` is also null
+- `$end` (int|null): End of the window, Unix timestamp in **milliseconds** (default: now). Move it back to page through history
+- `$start` (int|null): Start of the window, Unix timestamp in **milliseconds**. Mutually exclusive with `$period`; honoured from Network Application 11.0.89 (11.0.83 ignores it), the controller then picks the bucket size from the span: ≤1 day 5-minute, ≤7 days hourly, ≤60 days 8-hour, longer spans calendar months. There is no daily bucket size; derive daily values from the three 8-hour buckets per day
+- `$filter` (string|null): Filter expression using the official Network API grammar, e.g. `"siteId.eq('<site _id>')"`, `"deviceMac.in('aa:bb:cc:dd:ee:ff','11:22:33:44:55:66')"`, `"clientId.eq('<client mac>')"`, `"and(siteId.eq('…'),unitId.isNull())"`. Without a filter every key (all sites/devices/clients) is returned. The site key is the site `_id` (see `stat_sites()`), not the short name
+- `$projection` (string|null): Comma-separated list of `values(field,…)` for top-level value fields and `nested(group)` or `nested(group(values(field,…)))` for nested groups, e.g. `"values(rxBytes,txBytes),nested(byRadioBand)"`. Without a projection all top-level values and no nested groups are returned
+- `$no_gaps` (bool): When true every interval in the window gets a bucket, empty ones only carry `timestamp` and `duration` (default: false)
+
+**Returns:** array - Array of key objects (e.g. `siteId`, `deviceMac`), each with a `series` array of bucket objects holding `timestamp` (ms), `duration` (ms) and the requested values. Values are floats averaged per bucket
+
+**Throws:** `InvalidArgumentException` for an empty schema, an unknown period, or when both `$period` and `$start` are given; `JsonDecodeException` on controllers without the statistics engine (10.x and older)
+
+```php
+$site_uid = $client->stat_sites()[0]->_id;
+
+// WAN bytes for the last 24 hours, 5-minute buckets
+$wan = $client->stat_series('wanBySite', 'DAY', null, null, "siteId.eq('$site_uid')", 'values(rxBytes,txBytes)', true);
+
+// per-SSID client count and traffic for every AP, last hour
+$vaps = $client->stat_series('wirelessAnalyticsBySiteByDevice', 'HOUR', null, null, "siteId.eq('$site_uid')", 'nested(byVap(values(avgClientCount,rxBytes,txBytes)))');
+
+// a single client's activity for the last week, hourly buckets
+$client_series = $client->stat_series('activityBySiteByClient', 'WEEK', null, null, "clientId.eq('aa:bb:cc:dd:ee:ff')", 'values(durationMs,rxBytes,txBytes)');
+```
+
+Mapping from the legacy report methods: `stat_*_site()` → `wanBySite` / `wirelessBySite` / `clientCountBySite`; `stat_*_aps()` → `wirelessBySiteByDevice` (filter `deviceMac.eq()`/`deviceMac.in()`, no 10-AP cap observed); `stat_*_user()` → `activityBySiteByClient` (filter `clientId.eq('<mac>')`); `stat_*_gateway()` → `systemBySiteByDevice` + `wanBySiteByDevice`.
+
+### Aggregated Dashboard
+```php
+public function list_aggregated_dashboard(int $history_seconds = 86400): object
+```
+Retrieves the data behind the Network Application dashboard. Requires Network Application 10.x or later; replaces `list_dashboard()` on 11.x.
+
+**Parameters:**
+- `$history_seconds` (int): Length of the history window in seconds (default: 86400)
+
+**Returns:** object - One property per dashboard widget, e.g. `wan_activity`, `wifi_activity`, `radio_activity`, `wan_history`, `speed_test`, `isp_metrics`, `most_active_apps_aps_clients` (a `usage_by` array of `type` `client`/`ap`/`app` entries ranked by bytes; clients carry `display_name`, apps carry numeric `application`/`category` ids) and `most_common_client_fingerprints` (resolve the ids with `list_fingerprint_devices()`). `dashboard_meta.widgets` lists the widgets present for the site
+
+**Throws:** `InvalidArgumentException` when `$history_seconds` is not positive
+
 ### Site Statistics
 ```php
 public function stat_5minutes_site(?int $start = null, ?int $end = null, ?array $attribs = null): array
@@ -1967,22 +2124,41 @@ Retrieves site statistics at different time intervals.
 
 **Returns:** array - Array containing site statistics
 
+> **Network Application 11.x:** no longer populated, always returns an empty array. Use `stat_series()` (see the note at the top of this section).
+
 ### Access Point Statistics
 ```php
-public function stat_5minutes_aps(?int $start = null, ?int $end = null, ?string $mac = null, ?array $attribs = null): array
-public function stat_hourly_aps(?int $start = null, ?int $end = null, ?string $mac = null, ?array $attribs = null): array
-public function stat_daily_aps(?int $start = null, ?int $end = null, ?string $mac = null, ?array $attribs = null): array
-public function stat_monthly_aps(?int $start = null, ?int $end = null, ?string $mac = null, ?array $attribs = null): array
+public function stat_5minutes_aps(?int $start = null, ?int $end = null, $mac = null, ?array $attribs = null): array
+public function stat_hourly_aps(?int $start = null, ?int $end = null, $mac = null, ?array $attribs = null): array
+public function stat_daily_aps(?int $start = null, ?int $end = null, $mac = null, ?array $attribs = null): array
+public function stat_monthly_aps(?int $start = null, ?int $end = null, $mac = null, ?array $attribs = null): array
 ```
 Retrieves access point statistics at different time intervals.
 
 **Parameters:**
 - `$start` (int|null): Start time in Unix timestamp
 - `$end` (int|null): End time in Unix timestamp
-- `$mac` (string|null): MAC address of specific AP
+- `$mac` (string|array|null): MAC address of a specific AP, or an array of AP MAC addresses
 - `$attribs` (array|null): Array of attributes to retrieve
 
 **Returns:** array - Array containing AP statistics
+
+> **Network Application 11.x:** no longer populated, always returns an empty array. Use `stat_series()` (see the note at the top of this section).
+
+> **Note on the 10-AP limit:** when `$mac` is omitted, the controller caps the response at **10 access
+> points**, silently omitting the rest. Which APs are dropped varies per interval, so this is easy to
+> mistake for pagination. Passing an array of MAC addresses lifts the cap (the client then sends them as
+> the `macs` payload key):
+>
+> ```php
+> $aps  = array_filter($client->list_devices(), fn($d) => ($d->type ?? '') === 'uap');
+> $macs = array_values(array_map(fn($d) => $d->mac, $aps));
+>
+> $stats = $client->stat_hourly_aps(null, null, $macs);
+> ```
+>
+> MAC addresses are lowercased for you. Note that a filtered request may return one fewer time bucket per
+> AP at the range boundary than an unfiltered one.
 
 ### User Statistics
 ```php
@@ -2001,6 +2177,8 @@ Retrieves user statistics at different time intervals.
 
 **Returns:** array - Array containing user statistics
 
+> **Network Application 11.x:** no longer populated, always returns an empty array. Use `stat_series()` (see the note at the top of this section).
+
 ### Gateway Statistics
 ```php
 public function stat_5minutes_gateway(?int $start = null, ?int $end = null, ?array $attribs = null): array
@@ -2017,6 +2195,8 @@ Retrieves gateway statistics at different time intervals.
 
 **Returns:** array - Array containing gateway statistics
 
+> **Network Application 11.x:** no longer populated, always returns an empty array. Use `stat_series()` (see the note at the top of this section).
+
 ### Speed Test Results
 ```php
 public function stat_speedtest_results(?int $start = null, ?int $end = null): array
@@ -2028,6 +2208,8 @@ Retrieves speed test results.
 - `$end` (int|null): End time in Unix timestamp
 
 **Returns:** array - Array containing speed test results
+
+> **Network Application 11.x:** no longer populated, always returns an empty array. The latest result is in `list_aggregated_dashboard()->speed_test`; ISP metrics are in the `metricsBySiteByWanByIsp` schema of `stat_series()`.
 
 ### IPS Events
 ```php
@@ -2041,6 +2223,8 @@ Retrieves IPS (Intrusion Prevention System) events.
 - `$limit` (int|null): Maximum number of events to retrieve
 
 **Returns:** array - Array containing IPS events
+
+> **Network Application 11.x:** endpoint removed (HTTP 404, `ControllerErrorException`). Use `get_system_log('threat-alert')`.
 
 ### Sessions
 ```php
@@ -2252,6 +2436,26 @@ Gets or sets SSL verification settings.
 
 **Returns:** Current setting value
 
+### Get/Set API Key
+```php
+public function set_api_key(string $api_key): void
+public function get_api_key(): string
+```
+Enables API key authentication. When set, the client uses stateless API key auth instead of username/password login. API keys are only supported on UniFi OS-based controllers.
+
+**Parameters (set_api_key):**
+- `$api_key` (string): API key generated in the UniFi OS console
+
+**Returns (get_api_key):** string - Current API key, empty string if not set
+
+**Throws (set_api_key):**
+- `InvalidArgumentException` when an empty API key is provided
+
+**Notes:**
+- Calling `set_api_key()` automatically sets the UniFi OS flag to `true` and marks the client as ready for requests
+- No `login()` or `logout()` calls are needed (calling them is harmless)
+- Generate API keys in the UniFi OS console under **Integrations > Create New API Key**
+
 ### Get/Set UniFi OS Flag
 ```php
 public function get_is_unifi_os(): bool
@@ -2312,13 +2516,41 @@ public function get_class_version(): string
 ```
 Retrieves the version of this API client class.
 
-**Returns:** string - Class version (currently '2.0.9')
+**Returns:** string - Class version (currently '2.4.0')
 
 ---
 
+## Exceptions
+
+All Exceptions live in the `UniFi_API\Exceptions` namespace and implement `UnifiApiExceptionInterface`. All except `InvalidArgumentException` extend the `UnifiApiException` base class, which in turn extends `\Exception`.
+
+| Exception | Extends | Thrown when |
+|---|---|---|
+| `ControllerErrorException` | `UnifiApiException` | the controller returns an error in its response body (classic `meta.rc = 'error'`, v2 `errorCode`, UniFi OS `code`). Methods: `getApiErrorCode()`, `getResponse()` |
+| `ConsoleOfflineException` | `UnifiApiException` | the Site Manager proxy reports the console as offline (HTTP 408) |
+| `CurlExtensionNotLoadedException` | `UnifiApiException` | the PHP cURL extension is not loaded |
+| `CurlGeneralErrorException` | `UnifiApiException` | cURL reports an error. Methods: `getHttpResponseCode()`, `getCurlGetinfoResults()` |
+| `CurlTimeoutException` | `UnifiApiException` | the cURL request timed out. Methods: `getHttpResponseCode()`, `getCurlGetinfoResults()` |
+| `EmailInvalidException` | `UnifiApiException` | an invalid email address is provided |
+| `InvalidArgumentException` | `\InvalidArgumentException` | an invalid argument is provided (empty API key, empty console ID, unsupported DNS record type) |
+| `InvalidBaseUrlException` | `UnifiApiException` | the base URL is invalid |
+| `InvalidCurlMethodException` | `UnifiApiException` | an unsupported HTTP method is provided |
+| `InvalidSiteNameException` | `UnifiApiException` | the site name is invalid |
+| `JsonDecodeException` | `UnifiApiException` | the response could not be decoded as JSON |
+| `LoginFailedException` | `UnifiApiException` | login failed. Methods: `getHttpResponseCode()` |
+| `LoginRequiredException` | `UnifiApiException` | a method requiring login is called before `login()` |
+| `MacAddressEmptyException` | `UnifiApiException` | an empty MAC address is provided |
+| `MacAddressInvalidException` | `UnifiApiException` | an invalid MAC address is provided |
+| `MethodDeprecatedException` | `UnifiApiException` | a deprecated method is called |
+| `NotAUnifiOsConsoleException` | `UnifiApiException` | a UniFi OS-only method is called against a classic controller |
+
+`UnifiApiException` exposes `getHttpResponseCode()`, which returns the HTTP status code for cURL/login errors and `0` otherwise.
+
+Where a method's **Throws** list only mentions `UnifiApiException`, the method delegates to the internal request helper and may throw `LoginRequiredException`, `ControllerErrorException`, `JsonDecodeException`, `CurlGeneralErrorException`, `CurlTimeoutException`, `LoginFailedException` or `ConsoleOfflineException`.
+
 ## Notes
 
-- Most methods require a successful login() before use
+- Most methods require a successful `login()` before use, an API key to be set via `set_api_key()`, or Site Manager proxy mode enabled via `connect_via_site_manager()` or `enable_site_manager_proxy()`
 - Methods that accept the `$site_id` parameter typically default to the current site if not specified
 - Many methods accept flexible `$payload` parameters that should be structured like their corresponding list/get methods
 - Boolean return values typically indicate success (true) or failure (false)
@@ -2329,6 +2561,6 @@ Retrieves the version of this API client class.
 
 ## Version Information
 
-This documentation corresponds to UniFi API Client version **2.0.9**.
+This documentation corresponds to UniFi API Client version **2.4.0**.
 
 For more examples and usage information, visit the [GitHub repository](https://github.com/Art-of-WiFi/UniFi-API-client).
