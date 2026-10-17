@@ -28,6 +28,11 @@ include '../config/config.php';
 session_start();
 
 /**
+ * Refuse the request when a login is required and this session is not logged in.
+ */
+requireAjaxAuthentication();
+
+/**
  * Initialize the $results array.
  */
 $results = [

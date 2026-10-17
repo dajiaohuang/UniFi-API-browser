@@ -6,6 +6,22 @@
  */
 
 /**
+ * escape a value for safe insertion into HTML markup or a quoted attribute
+ *
+ * Everything that comes from the controller (site names, client hostnames, SSIDs, notes, ...) or from the server
+ * must pass through this function before it is concatenated into a string for .html() or .append(). Plain values
+ * that go into an element on their own should use .text() instead.
+ */
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
  * initialize some vars for later use
  */
 let controller = {
@@ -70,7 +86,7 @@ $('.controller_idx').on('click', function(){
         /**
          * change the label in the controller dropdown "button"
          */
-        $('#navbar_controller_dropdown_link').html(controller.full_name);
+        $('#navbar_controller_dropdown_link').text(controller.full_name);
 
         /**
          * toggle the active class together with check marks
@@ -156,7 +172,7 @@ $('#site_dropdown').on('click', '.site_idx', function(){
         selected_site.name = $(this).text();
         selected_site.id   = $(this).data('site_id');
 
-        $('#navbar_site_dropdown_link').html(selected_site.name);
+        $('#navbar_site_dropdown_link').text(selected_site.name);
         $('.alert_wrapper').addClass('d-none');
 
         $('#collection_dropdown').removeClass('d-none');
@@ -357,7 +373,7 @@ function fetchSites() {
                 } else {
                     $('#site_dropdown > li > div').html('<h5 class="dropdown-header">Select a site</h5>');
                     $.each(unifi_sites, function( index, value ) {
-                        $('#site_dropdown > li > div').append('<a class="site_idx dropdown-item" id="' + value.site_id + '" data-site_id="' + value.site_id + '" href="#">' + value.site_full_name + '</a>');
+                        $('#site_dropdown > li > div').append('<a class="site_idx dropdown-item" id="' + escapeHtml(value.site_id) + '" data-site_id="' + escapeHtml(value.site_id) + '" href="#">' + escapeHtml(value.site_full_name) + '</a>');
                     });
 
                     /**
@@ -418,18 +434,17 @@ function fetchDebugDetails() {
 function buildSummaryLine() {
     let params_string = JSON.stringify(selected_collection.params).slice(1,-1);
     let site_part = selected_site.name || '(no site)';
+    let separator = ' <i class="fas fa-sm fa-chevron-right"></i> ';
 
     if (controller.type === 'official') {
         let api_call = selected_collection.resource + '()->' + selected_collection.method + '()';
-        return controller.full_name + ' <i class="fas fa-sm fa-chevron-right"></i> ' + site_part +
-            ' <i class="fas fa-sm fa-chevron-right"></i> ' +
-            selected_collection.group + ' <i class="fas fa-sm fa-chevron-right"></i> ' + selected_collection.label +
-            ' / API call: <code>' + api_call + '</code> / ';
+        return escapeHtml(controller.full_name) + separator + escapeHtml(site_part) + separator +
+            escapeHtml(selected_collection.group) + separator + escapeHtml(selected_collection.label) +
+            ' / API call: <code>' + escapeHtml(api_call) + '</code> / ';
     } else {
-        return controller.full_name + ' <i class="fas fa-sm fa-chevron-right"></i> ' + selected_site.name +
-            ' <i class="fas fa-sm fa-chevron-right"></i> ' +
-            selected_collection.group + ' <i class="fas fa-sm fa-chevron-right"></i> ' + selected_collection.label +
-            ' / API function: <code>' + selected_collection.method + '(' + params_string + ')</code> / ';
+        return escapeHtml(controller.full_name) + separator + escapeHtml(selected_site.name) + separator +
+            escapeHtml(selected_collection.group) + separator + escapeHtml(selected_collection.label) +
+            ' / API function: <code>' + escapeHtml(selected_collection.method + '(' + params_string + ')') + '</code> / ';
     }
 }
 
@@ -490,7 +505,7 @@ function fetchCollection() {
                  */
                 if (selected_output_method === 'json' || selected_output_method === 'json_highlighted') {
                     var output = JSON.stringify(json.data, undefined, 4);
-                    $('#output_pre').html('<code id="copy_container" class="json js-copy-target">' + output + '</code>');
+                    $('#output_pre').html('<code id="copy_container" class="json js-copy-target">' + escapeHtml(output) + '</code>');
 
                     if (selected_output_method === 'json_highlighted') {
                         hljs.highlightBlock(document.getElementById('output_pre'));
@@ -533,7 +548,7 @@ function fetchCollection() {
                 /**
                  * update the objects count
                  */
-                $('#objects_count').html(json.count);
+                $('#objects_count').text(json.count);
 
                 /**
                  * show pagination info for official API
@@ -567,7 +582,7 @@ function fetchCollection() {
         error: function(jqXHR, textStatus, errorThrown) {
             console.error(jqXHR);
             clearOutputSpinner();
-            renderGeneralErrorAlert('The request to the API browser backend failed (' + (errorThrown || textStatus) + '), please check the web server error log.');
+            renderGeneralErrorAlert((jqXHR.responseJSON && jqXHR.responseJSON.message) || 'The request to the API browser backend failed (' + (errorThrown || textStatus) + '), please check the web server error log.');
         }
     });
 }
@@ -615,7 +630,7 @@ function fetchAllPages() {
             if (json.state === 'success') {
                 if (selected_output_method === 'json' || selected_output_method === 'json_highlighted') {
                     var output = JSON.stringify(json.data, undefined, 4);
-                    $('#output_pre').html('<code id="copy_container" class="json js-copy-target">' + output + '</code>');
+                    $('#output_pre').html('<code id="copy_container" class="json js-copy-target">' + escapeHtml(output) + '</code>');
 
                     if (selected_output_method === 'json_highlighted') {
                         hljs.highlightBlock(document.getElementById('output_pre'));
@@ -636,7 +651,7 @@ function fetchAllPages() {
                 );
 
                 $('[data-toggle="tooltip"]').tooltip();
-                $('#objects_count').html(json.count);
+                $('#objects_count').text(json.count);
 
                 if (json.pagination !== undefined && json.pagination !== null) {
                     $('#pagination_info').removeClass('d-none').html(
@@ -654,7 +669,7 @@ function fetchAllPages() {
         error: function(jqXHR, textStatus, errorThrown) {
             console.error(jqXHR);
             clearOutputSpinner();
-            renderGeneralErrorAlert('The request to the API browser backend failed (' + (errorThrown || textStatus) + '), please check the web server error log.');
+            renderGeneralErrorAlert((jqXHR.responseJSON && jqXHR.responseJSON.message) || 'The request to the API browser backend failed (' + (errorThrown || textStatus) + '), please check the web server error log.');
         }
     });
 }
@@ -682,7 +697,7 @@ function renderGeneralErrorAlert(error_message) {
      * render the alert
      */
     $('#general_error_alert_wrapper').removeClass('d-none');
-    $('#general_error').html(error_message);
+    $('#general_error').text(error_message);
 }
 
 /**
@@ -697,10 +712,10 @@ function updateAboutModal() {
         url:      'ajax/fetch_about_modal_metrics.php',
         dataType: 'json',
         success: function (json) {
-            $('#span_controller_url').html(json.controller_url);
-            $('#span_controller_user').html(json.controller_user);
-            $('#span_controller_version').html(json.controller_version);
-            $('#span_memory_used').html(json.memory_used);
+            $('#span_controller_url').text(json.controller_url);
+            $('#span_controller_user').text(json.controller_user);
+            $('#span_controller_version').text(json.controller_version);
+            $('#span_memory_used').text(json.memory_used);
 
             /**
              * Update the auth label based on controller type
@@ -808,7 +823,7 @@ $('#about_modal').on('shown.bs.modal', function (e) {
                 }
 
                 if (cmpVersion(api_browser_version, normalizedTagName) < 0) {
-                    version_update_span.html('an update is available: ' + normalizedTagName);
+                    version_update_span.text('an update is available: ' + normalizedTagName);
                     $('#span_api_browser_update').removeClass('badge-success').addClass('badge-warning');
                 } else if (cmpVersion(api_browser_version, normalizedTagName) === 0) {
                     version_update_span.html('up to date');

@@ -44,6 +44,11 @@ include '../config/config.php';
 session_start();
 
 /**
+ * Refuse the request when a login is required and this session is not logged in.
+ */
+requireAjaxAuthentication();
+
+/**
  * An array containing attributes to fetch for the gateway stats, overriding
  * the default attributes.
  */
@@ -108,9 +113,9 @@ if (!empty($_SESSION['controller'])) {
      * response_mode (official API only: 'data_only' or 'full')
      * fetch_all (official API only: '1' to fetch all pages)
      */
-    error_log('fetching results for collection:' . $_POST['selected_collection_label']);
+    error_log('fetching results for collection: ' . str_replace(["\r", "\n"], ' ', (string) ($_POST['selected_collection_label'] ?? '')));
 
-    if (!empty($_POST['selected_collection_method'])) {
+    if (!empty($_POST['selected_collection_method']) && is_string($_POST['selected_collection_method'])) {
         $method = $_POST['selected_collection_method'];
     }
 
@@ -119,7 +124,39 @@ if (!empty($_SESSION['controller'])) {
          * Decode to arrays so that associative parameters (e.g. the $custom_payload of get_system_log()) arrive
          * as PHP arrays rather than stdClass objects.
          */
-        $params = json_decode($_POST['selected_collection_params'], true) ?? [];
+        $params = json_decode($_POST['selected_collection_params'], true);
+
+        if (!is_array($params)) {
+            $params = [];
+        }
+    }
+
+    /**
+     * Only methods offered in the menus may be called: the built-in collections plus the custom menus from
+     * config.php for classic controllers ($collections as built by collections.php and config.php), and the
+     * resource/method pairs from collections-official.php for official API controllers. Without this check any
+     * client method could be invoked by name, including ones that change or delete controller configuration.
+     */
+    $requested_resource = is_string($_POST['selected_collection_resource'] ?? null) ? $_POST['selected_collection_resource'] : '';
+
+    if ($controller_type === 'official') {
+        $allowed_methods  = getAllowedCollectionMethods(getOfficialCollections(), true);
+        $requested_method = $requested_resource . '::' . $method;
+    } else {
+        $allowed_methods  = getAllowedCollectionMethods($collections);
+        $requested_method = $method;
+    }
+
+    if ($method !== '' && !isset($allowed_methods[$requested_method])) {
+        error_log('refused a request for a method that is not offered in the menus: ' . $requested_method);
+        http_response_code(403);
+        returnJson([
+            'state'   => 'error',
+            'message' => 'This method is not available in the collection menus.',
+            'data'    => [],
+        ]);
+
+        exit;
     }
 
     if (!empty($_POST['selected_site_id'])) {

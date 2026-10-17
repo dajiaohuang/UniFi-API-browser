@@ -43,27 +43,33 @@ $_SESSION['logged_in']           = false;
  * load login form data if present, then login to test
  */
 if (isset($_POST['user_name']) && !empty($_POST['user_name']) && isset($_POST['password']) && !empty($_POST['password'])) {
-    $user_name = $_POST['user_name'];
-    $password  = $_POST['password'];
+    $user_name = (string) $_POST['user_name'];
+    $password  = (string) $_POST['password'];
 
     /**
      * check the user accounts whether we allow the user to login, if so, we change the value of $_SESSION['logged_in'] to true
+     * - password_hash() hashes (bcrypt/argon2) and legacy SHA-512 hex hashes are both accepted, see verifyUserPassword()
      */
-    $password_hash = hash('sha512', $password);
-
-    if (!empty($users)) {
+    if (!empty($users) && is_array($users)) {
         foreach ($users as $user) {
-            if ($user['user_name'] === $user_name && strtoupper($user['password']) === strtoupper($password_hash)) {
+            if (empty($user['user_name']) || empty($user['password'])) {
+                continue;
+            }
+
+            if ($user['user_name'] === $user_name && verifyUserPassword($password, (string) $user['password'])) {
                 /**
-                 * we have a matching user_name/password combination
+                 * we have a matching user_name/password combination, issue a fresh session id to prevent session fixation
                  */
-                error_log('successful login for user ' . $user_name);
-                $_SESSION['logged_in'] = true;
+                session_regenerate_id(true);
+                error_log('successful login for user ' . str_replace(["\r", "\n"], ' ', $user_name));
+                $_SESSION['logged_in']           = true;
+                $_SESSION['login_error_message'] = '';
+                break;
             }
         }
 
         if ($_SESSION['logged_in'] === false) {
-            error_log('failed login attempt for user ' . $user_name);
+            error_log('failed login attempt for user ' . str_replace(["\r", "\n"], ' ', $user_name));
         }
     }
 }

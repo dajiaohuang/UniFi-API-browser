@@ -56,6 +56,137 @@ function getOfficialClientVersion(): string
 }
 
 /**
+ * Whether access to this tool requires a login.
+ *
+ * Mirrors the rule applied by index.php: login is required when config/users.php exists and defines a non-empty
+ * $users array. The file is loaded in function scope so it does not leak variables into the caller.
+ *
+ * @return bool true when users.php defines user accounts
+ */
+function isUserAuthenticationEnabled(): bool
+{
+    $users_file = __DIR__ . '/config/users.php';
+
+    if (!is_file($users_file) || !is_readable($users_file)) {
+        return false;
+    }
+
+    $users = null;
+    require $users_file;
+
+    return is_array($users) && count($users) > 0;
+}
+
+/**
+ * Stop an AJAX request when a login is required and the session is not logged in.
+ *
+ * Must be called after session_start(). Responds with HTTP 401 and the JSON structure the front end expects, so
+ * that the error is shown to the user instead of ending in a silent failure.
+ *
+ * @return void
+ */
+function requireAjaxAuthentication(): void
+{
+    if (!isUserAuthenticationEnabled() || !empty($_SESSION['logged_in'])) {
+        return;
+    }
+
+    http_response_code(401);
+    returnJson([
+        'state'   => 'error',
+        'message' => 'You are not logged in or your session has expired, please reload the page and log in.',
+        'data'    => [],
+    ]);
+
+    exit;
+}
+
+/**
+ * Collect the methods offered by a set of collection menus.
+ *
+ * Walks the nested menu structure (groups with 'options', which may contain further 'options') and returns the
+ * allowed method identifiers. For classic controllers the identifier is the client method name; for official
+ * controllers it is "resource::method".
+ *
+ * @param array $collections menu definition as built by collections.php, collections-official.php and config.php
+ * @param bool $official true to build "resource::method" identifiers for the official API
+ * @return array<string, true> set of allowed method identifiers
+ */
+function getAllowedCollectionMethods(array $collections, bool $official = false): array
+{
+    $allowed = [];
+
+    foreach ($collections as $entry) {
+        if (!is_array($entry)) {
+            continue;
+        }
+
+        if (!empty($entry['options']) && is_array($entry['options'])) {
+            $allowed += getAllowedCollectionMethods($entry['options'], $official);
+        }
+
+        if (($entry['type'] ?? '') !== 'collection' || empty($entry['method']) || !is_string($entry['method'])) {
+            continue;
+        }
+
+        if ($official) {
+            if (!empty($entry['resource']) && is_string($entry['resource'])) {
+                $allowed[$entry['resource'] . '::' . $entry['method']] = true;
+            }
+        } else {
+            $allowed[$entry['method']] = true;
+        }
+    }
+
+    return $allowed;
+}
+
+/**
+ * Load the menu definition for official API controllers.
+ *
+ * collections-official.php defines the same $collections variable as collections.php, so it is loaded in function
+ * scope to keep both definitions apart.
+ *
+ * @return array menu definition for official API controllers
+ */
+function getOfficialCollections(): array
+{
+    $collections = [];
+    require __DIR__ . '/collections-official.php';
+
+    return $collections;
+}
+
+/**
+ * Verify a password against the value stored in config/users.php.
+ *
+ * Accepts a hash produced by password_hash() (bcrypt, argon2) and, for backward compatibility, the raw SHA-512 hex
+ * digest of the password (compared case-insensitively and in constant time).
+ *
+ * @param string $password the password as entered by the user
+ * @param string $stored_hash the 'password' value from config/users.php
+ * @return bool true when the password matches
+ */
+function verifyUserPassword(string $password, string $stored_hash): bool
+{
+    $stored_hash = trim($stored_hash);
+
+    if ($password === '' || $stored_hash === '') {
+        return false;
+    }
+
+    if (password_get_info($stored_hash)['algo'] !== null) {
+        return password_verify($password, $stored_hash);
+    }
+
+    if (preg_match('/^[0-9a-f]{128}$/i', $stored_hash) === 1) {
+        return hash_equals(strtolower($stored_hash), hash('sha512', $password));
+    }
+
+    return false;
+}
+
+/**
  * Replace the {site_uid} placeholder in string parameters with the _id (UUID) of the selected site.
  *
  * The Network Application 11.x statistics engine (stat_series()) filters on the site _id rather than on the short
