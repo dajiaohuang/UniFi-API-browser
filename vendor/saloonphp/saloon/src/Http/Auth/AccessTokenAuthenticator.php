@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Saloon\Http\Auth;
 
+use Saloon\Config;
 use DateTimeImmutable;
 use Saloon\Http\PendingRequest;
 use Saloon\Contracts\OAuthAuthenticator;
@@ -38,7 +39,7 @@ class AccessTokenAuthenticator implements OAuthAuthenticator
             return false;
         }
 
-        return $this->expiresAt->getTimestamp() <= (new DateTimeImmutable)->getTimestamp();
+        return $this->expiresAt->getTimestamp() <= Config::now()->getTimestamp();
     }
 
     /**
@@ -87,21 +88,5 @@ class AccessTokenAuthenticator implements OAuthAuthenticator
     public function isNotRefreshable(): bool
     {
         return ! $this->isRefreshable();
-    }
-
-    /**
-     * Serialize the access token.
-     */
-    public function serialize(): string
-    {
-        return serialize($this);
-    }
-
-    /**
-     * Unserialize the access token.
-     */
-    public static function unserialize(string $string): static
-    {
-        return unserialize($string, ['allowed_classes' => true]);
     }
 }

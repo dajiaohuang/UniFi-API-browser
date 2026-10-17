@@ -12,28 +12,28 @@ use ArtOfWiFi\UnifiNetworkApplicationApi\Filters\Filter;
  * Provides a type-safe, fluent interface for building DNS policy filters.
  *
  * Filterable Properties (per UniFi API specification):
- * - type (STRING) - eq, ne, in, notIn
+ * - type (STRING) - eq, ne, in, notIn (Values: A_RECORD, AAAA_RECORD, CNAME_RECORD, MX_RECORD, TXT_RECORD, SRV_RECORD, FORWARD_DOMAIN)
  * - id (UUID) - eq, ne, in, notIn
  * - enabled (BOOLEAN) - eq, ne
  * - domain (STRING) - eq, ne, in, notIn, like
- * - ipv4Address (STRING) - eq, ne, in, notIn
- * - ipv6Address (STRING) - eq, ne, in, notIn
+ * - ipv4Address (STRING) - eq, ne, in, notIn, like
+ * - ipv6Address (STRING) - eq, ne, in, notIn, like
  * - targetDomain (STRING) - eq, ne, in, notIn, like
  * - mailServerDomain (STRING) - eq, ne, in, notIn, like
  * - text (STRING) - eq, ne, in, notIn, like
  * - serverDomain (STRING) - eq, ne, in, notIn, like
- * - ipAddress (STRING) - eq, ne, in, notIn
- * - ttlSeconds (INTEGER) - eq, ne, gt, ge, lt, le
- * - priority (INTEGER) - eq, ne, gt, ge, lt, le
+ * - ipAddress (STRING) - eq, ne, in, notIn, like
+ * - ttlSeconds (INTEGER) - eq, ne, gt, ge, lt, le, in, notIn
+ * - priority (INTEGER) - eq, ne, gt, ge, lt, le, in, notIn
  * - service (STRING) - eq, ne, in, notIn
  * - protocol (STRING) - eq, ne, in, notIn
- * - port (INTEGER) - eq, ne, gt, ge, lt, le
- * - weight (INTEGER) - eq, ne, gt, ge, lt, le
+ * - port (INTEGER) - eq, ne, gt, ge, lt, le, in, notIn
+ * - weight (INTEGER) - eq, ne, gt, ge, lt, le, in, notIn
  *
  * @example
  * ```php
  * // Find A records
- * DnsPolicyFilter::type()->equals('A')
+ * DnsPolicyFilter::type()->equals('A_RECORD')
  *
  * // Find enabled policies for a domain
  * DnsPolicyFilter::and(
@@ -45,7 +45,7 @@ use ArtOfWiFi\UnifiNetworkApplicationApi\Filters\Filter;
 class DnsPolicyFilter extends Filter
 {
     /**
-     * Filter by record type (A, AAAA, CNAME, MX, TXT, SRV, FORWARD_DOMAIN)
+     * Filter by record type (A_RECORD, AAAA_RECORD, CNAME_RECORD, MX_RECORD, TXT_RECORD, SRV_RECORD, FORWARD_DOMAIN)
      *
      * Supported operators: eq, ne, in, notIn
      */
@@ -87,7 +87,7 @@ class DnsPolicyFilter extends Filter
     /**
      * Filter by IPv4 address
      *
-     * Supported operators: eq, ne, in, notIn
+     * Supported operators: eq, ne, in, notIn, like
      */
     public static function ipv4Address(): static
     {
@@ -97,7 +97,7 @@ class DnsPolicyFilter extends Filter
     /**
      * Filter by IPv6 address
      *
-     * Supported operators: eq, ne, in, notIn
+     * Supported operators: eq, ne, in, notIn, like
      */
     public static function ipv6Address(): static
     {
@@ -147,7 +147,7 @@ class DnsPolicyFilter extends Filter
     /**
      * Filter by IP address
      *
-     * Supported operators: eq, ne, in, notIn
+     * Supported operators: eq, ne, in, notIn, like
      */
     public static function ipAddress(): static
     {
@@ -157,7 +157,7 @@ class DnsPolicyFilter extends Filter
     /**
      * Filter by TTL in seconds
      *
-     * Supported operators: eq, ne, gt, ge, lt, le
+     * Supported operators: eq, ne, gt, ge, lt, le, in, notIn
      */
     public static function ttlSeconds(): static
     {
@@ -167,7 +167,7 @@ class DnsPolicyFilter extends Filter
     /**
      * Filter by priority (MX/SRV records)
      *
-     * Supported operators: eq, ne, gt, ge, lt, le
+     * Supported operators: eq, ne, gt, ge, lt, le, in, notIn
      */
     public static function priority(): static
     {
@@ -197,7 +197,7 @@ class DnsPolicyFilter extends Filter
     /**
      * Filter by port number (SRV records)
      *
-     * Supported operators: eq, ne, gt, ge, lt, le
+     * Supported operators: eq, ne, gt, ge, lt, le, in, notIn
      */
     public static function port(): static
     {
@@ -207,7 +207,7 @@ class DnsPolicyFilter extends Filter
     /**
      * Filter by weight (SRV records)
      *
-     * Supported operators: eq, ne, gt, ge, lt, le
+     * Supported operators: eq, ne, gt, ge, lt, le, in, notIn
      */
     public static function weight(): static
     {
@@ -221,7 +221,7 @@ class DnsPolicyFilter extends Filter
      */
     public static function aRecords(): static
     {
-        return static::type()->equals('A');
+        return static::type()->equals('A_RECORD');
     }
 
     /**
@@ -229,7 +229,7 @@ class DnsPolicyFilter extends Filter
      */
     public static function aaaaRecords(): static
     {
-        return static::type()->equals('AAAA');
+        return static::type()->equals('AAAA_RECORD');
     }
 
     /**
@@ -237,7 +237,7 @@ class DnsPolicyFilter extends Filter
      */
     public static function cnameRecords(): static
     {
-        return static::type()->equals('CNAME');
+        return static::type()->equals('CNAME_RECORD');
     }
 
     /**
@@ -245,7 +245,7 @@ class DnsPolicyFilter extends Filter
      */
     public static function mxRecords(): static
     {
-        return static::type()->equals('MX');
+        return static::type()->equals('MX_RECORD');
     }
 
     /**
@@ -253,7 +253,7 @@ class DnsPolicyFilter extends Filter
      */
     public static function txtRecords(): static
     {
-        return static::type()->equals('TXT');
+        return static::type()->equals('TXT_RECORD');
     }
 
     /**
@@ -261,7 +261,7 @@ class DnsPolicyFilter extends Filter
      */
     public static function srvRecords(): static
     {
-        return static::type()->equals('SRV');
+        return static::type()->equals('SRV_RECORD');
     }
 
     /**
