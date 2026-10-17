@@ -560,11 +560,14 @@ function fetchCollection() {
                 updateAboutModal();
             } else {
                 console.error(json.message);
+                clearOutputSpinner();
                 renderGeneralErrorAlert(json.message);
             }
         },
         error: function(jqXHR, textStatus, errorThrown) {
             console.error(jqXHR);
+            clearOutputSpinner();
+            renderGeneralErrorAlert('The request to the API browser backend failed (' + (errorThrown || textStatus) + '), please check the web server error log.');
         }
     });
 }
@@ -644,13 +647,26 @@ function fetchAllPages() {
                 updateAboutModal();
             } else {
                 console.error(json.message);
+                clearOutputSpinner();
                 renderGeneralErrorAlert(json.message);
             }
         },
         error: function(jqXHR, textStatus, errorThrown) {
             console.error(jqXHR);
+            clearOutputSpinner();
+            renderGeneralErrorAlert('The request to the API browser backend failed (' + (errorThrown || textStatus) + '), please check the web server error log.');
         }
     });
+}
+
+/**
+ * function to replace the "fetching" spinners in the output area and the objects badge after a failed request,
+ * so that a failed collection fetch does not look like it is still running
+ */
+function clearOutputSpinner() {
+    $('#output_pre').html('<div class="p-3 text-muted">No data received, see the error message above.</div>');
+    $('#objects_count').html('0');
+    $('#pagination_info').addClass('d-none');
 }
 
 /**
