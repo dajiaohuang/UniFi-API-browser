@@ -8,6 +8,7 @@ use LogicException;
 use Saloon\Enums\Method;
 use Saloon\Traits\Bootable;
 use Saloon\Traits\Makeable;
+use Saloon\Traits\Macroable;
 use Saloon\Traits\HasDebugging;
 use Saloon\Traits\Conditionable;
 use Saloon\Traits\HasMockClient;
@@ -30,9 +31,16 @@ abstract class Request
     use HasMockClient;
     use Conditionable;
     use HasDebugging;
+    use Macroable;
     use HasTries;
     use Bootable;
     use Makeable;
+
+    /**
+     * When non-null, overrides connector / OAuth resolution for absolute endpoints in resolveEndpoint().
+     * null = inherit. Set true/false on the instance or declare on your request subclass.
+     */
+    public ?bool $allowBaseUrlOverride = null;
 
     /**
      * Define the HTTP method.
@@ -49,6 +57,36 @@ abstract class Request
         }
 
         return $this->method;
+    }
+
+    /**
+     * Ensure cloned requests do not share mutable object state (query, headers, etc.).
+     *
+     * Without this, a shallow clone reuses the same {@see \Saloon\Repositories\ArrayStore}
+     * instances when they were initialized before cloning, which breaks concurrent pools
+     * (e.g. paginated requests mutating the same query bag).
+     */
+    public function __clone(): void
+    {
+        if (isset($this->query)) {
+            $this->query = clone $this->query;
+        }
+
+        if (isset($this->headers)) {
+            $this->headers = clone $this->headers;
+        }
+
+        if (isset($this->config)) {
+            $this->config = clone $this->config;
+        }
+
+        if (isset($this->delay)) {
+            $this->delay = clone $this->delay;
+        }
+
+        if (isset($this->middlewarePipeline)) {
+            $this->middlewarePipeline = clone $this->middlewarePipeline;
+        }
     }
 
     /**

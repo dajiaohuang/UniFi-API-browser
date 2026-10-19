@@ -6,7 +6,11 @@ namespace Saloon\Http;
 
 use Throwable;
 use LogicException;
+use function implode;
 use SimpleXMLElement;
+use function is_array;
+use GuzzleHttp\Psr7\Utils;
+use function mb_strtolower;
 use Saloon\Traits\Macroable;
 use InvalidArgumentException;
 use Saloon\Helpers\ArrayHelpers;
@@ -166,6 +170,21 @@ class Response
         }
 
         return $stream;
+    }
+
+    /**
+     * Return a new response with the body replaced by a seekable stream containing the given content.
+     * Use when the original body stream is not seekable (e.g. after debug has consumed it) so
+     * subsequent callers still receive the full body.
+     */
+    public function withBufferedBody(string $body): static
+    {
+        return new static(
+            $this->psrResponse->withBody(Utils::streamFor($body)),
+            $this->pendingRequest,
+            $this->psrRequest,
+            $this->senderException
+        );
     }
 
     /**
@@ -486,7 +505,13 @@ class Response
      */
     public function header(string $header): string|array|null
     {
-        return $this->headers()->get($header);
+        if (! $this->psrResponse->hasHeader($header)) {
+            return null;
+        }
+
+        $values = $this->psrResponse->getHeader($header);
+
+        return count($values) === 1 ? $values[0] : $values;
     }
 
     /**
@@ -496,13 +521,15 @@ class Response
     {
         $contentType = $this->header('Content-Type');
 
-        if (is_null($contentType)) {
+        if (empty($contentType)) {
             return false;
         }
 
-        $contentType = is_array($contentType) ? $contentType[0] : $contentType;
+        if (is_array($contentType)) {
+            $contentType = implode(',', $contentType);
+        }
 
-        return str_contains($contentType, 'json');
+        return str_contains(mb_strtolower($contentType), 'json');
     }
 
     /**
@@ -512,13 +539,15 @@ class Response
     {
         $contentType = $this->header('Content-Type');
 
-        if (is_null($contentType)) {
+        if (empty($contentType)) {
             return false;
         }
 
-        $contentType = is_array($contentType) ? $contentType[0] : $contentType;
+        if (is_array($contentType)) {
+            $contentType = implode(',', $contentType);
+        }
 
-        return str_contains($contentType, 'xml');
+        return str_contains(mb_strtolower($contentType), 'xml');
     }
 
     /**

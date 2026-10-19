@@ -46,6 +46,11 @@ include '../config/config.php';
 session_start();
 
 /**
+ * Refuse the request when a login is required and this session is not logged in.
+ */
+requireAjaxAuthentication();
+
+/**
  * Initialize the $results array.
  */
 $results = [
@@ -217,13 +222,21 @@ if (!empty($_SESSION['controller'])) {
                 $_SESSION['unificookie'] = $unifi_connection->get_cookie();
 
                 /**
-                 * Loop through the fetched sites.
+                 * Loop through the fetched sites. The site _id (a UUID) is kept in the session because the
+                 * Network Application 11.x statistics engine keys on it rather than on the short site name,
+                 * see the {site_uid} placeholder handling in fetch_collection.php.
                  */
+                $_SESSION['site_uids'] = [];
+
                 foreach ($sites_array as $site) {
                     $results['data'][] = [
                         'site_id'        => $site->name ?? $unknown_string,
                         'site_full_name' => $site->desc ?? $unknown_string,
                     ];
+
+                    if (!empty($site->name) && !empty($site->_id)) {
+                        $_SESSION['site_uids'][$site->name] = $site->_id;
+                    }
                 }
 
                 /**

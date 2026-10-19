@@ -32,6 +32,8 @@ class GuzzleSender implements Sender
 
     /**
      * Guzzle's Handler Stack.
+     *
+     * @var HandlerStack<callable(RequestInterface, array<array-key, mixed>): PromiseInterface<ResponseInterface, mixed>>
      */
     protected HandlerStack $handlerStack;
 
@@ -66,11 +68,7 @@ class GuzzleSender implements Sender
      */
     protected function createGuzzleClient(): GuzzleClient
     {
-        // We'll use HandlerStack::create as it will create a default
-        // handler stack with the default Guzzle middleware like
-        // http_errors, cookies etc.
-
-        $this->handlerStack = HandlerStack::create();
+        $this->handlerStack = $this->defaultHandlerStack();
 
         // Now we'll return new Guzzle client with some default request
         // options configured. We'll also define the handler stack we
@@ -84,6 +82,20 @@ class GuzzleSender implements Sender
             RequestOptions::HTTP_ERRORS => true,
             'handler' => $this->handlerStack,
         ]);
+    }
+
+    /**
+     * The default handler stack used by the underlying Guzzle client
+     *
+     * @return HandlerStack<callable(RequestInterface, array<array-key, mixed>): PromiseInterface<ResponseInterface, mixed>>
+     */
+    protected function defaultHandlerStack(): HandlerStack
+    {
+        // We'll use HandlerStack::create as it will create a default
+        // handler stack with the default Guzzle middleware like
+        // http_errors, cookies etc.
+
+        return HandlerStack::create();
     }
 
     /**
@@ -110,7 +122,7 @@ class GuzzleSender implements Sender
             // Sometimes, Guzzle will throw a RequestException without a response. This
             // means that it was fatal, so we should still throw a fatal request exception.
 
-            $guzzleResponse = $exception->getResponse();
+            $guzzleResponse = method_exists($exception, 'getResponse') ? $exception->getResponse() : null;
 
             if (is_null($guzzleResponse)) {
                 throw new FatalRequestException($exception, $pendingRequest);
@@ -158,7 +170,7 @@ class GuzzleSender implements Sender
                     // Sometimes, Guzzle will throw a RequestException without a response. This
                     // means that it was fatal, so we should still throw a fatal request exception.
 
-                    $guzzleResponse = $guzzleException->getResponse();
+                    $guzzleResponse = method_exists($guzzleException, 'getResponse') ? $guzzleException->getResponse() : null;
 
                     if (is_null($guzzleResponse)) {
                         throw new FatalRequestException($guzzleException, $pendingRequest);
@@ -203,6 +215,8 @@ class GuzzleSender implements Sender
     /**
      * Overwrite the entire handler stack.
      *
+     * @param HandlerStack<callable(RequestInterface, array<array-key, mixed>): PromiseInterface<ResponseInterface, mixed>> $handlerStack
+     *
      * @return $this
      */
     public function setHandlerStack(HandlerStack $handlerStack): static
@@ -214,6 +228,8 @@ class GuzzleSender implements Sender
 
     /**
      * Get the handler stack.
+     *
+     * @return HandlerStack<callable(RequestInterface, array<array-key, mixed>): PromiseInterface<ResponseInterface, mixed>>
      */
     public function getHandlerStack(): HandlerStack
     {

@@ -1,16 +1,28 @@
 ## API client class usage examples
 
-This directory contains some PHP code examples which demonstrate usage of the PHP API client class and can be used as a
+This directory contains PHP code examples which demonstrate usage of the PHP API client class and can be used as a
 good starting point for your own custom code.
 
 ### Usage
 
-Copy the appropriate example file to your working directory together with a copy of the config.template.php file which
-should be renamed to config.php. Then update the contents of your new config.php with your controller details and
+Copy the appropriate example file to your working directory together with a copy of the `config.template.php` file which
+should be renamed to `config.php`. Then update the contents of your new `config.php` with your controller details and
 credentials and modify the example file as required to fit your needs.
 
 Also make sure to update the path for the composer autoloader file (`vendor/autoload.php`) or the file containing the
 Class itself (`src/Client.php`) in your `require_once()` statement as required.
+
+### Authentication
+
+The examples support both authentication methods:
+
+- **API key authentication** — see `api_key_auth.php` for a complete example. This is the recommended method for
+  UniFi OS-based controllers and is **required** for controllers that are part of a UniFi Fabric. Set the
+  `$controllerapikey` variable in your `config.php`.
+- **Username/password authentication** — used by most other example files. Set the `$controlleruser` and
+  `$controllerpassword` variables in your `config.php`.
+
+See the main [README](../README.md#authentication) for details on when to use which method.
 
 #### Executing scripts from the CLI
 

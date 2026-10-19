@@ -4,12 +4,18 @@ declare(strict_types=1);
 
 namespace Saloon\Http\Faking;
 
+use Closure;
+use ReflectionType;
 use ReflectionClass;
+use ReflectionFunction;
+use ReflectionNamedType;
+use ReflectionUnionType;
 use Saloon\Http\Request;
 use Saloon\Http\Response;
 use Saloon\Http\Connector;
 use Saloon\Helpers\Helpers;
 use Saloon\Helpers\URLHelper;
+use ReflectionIntersectionType;
 use Saloon\Http\PendingRequest;
 use PHPUnit\Framework\Assert as PHPUnit;
 use Saloon\Exceptions\NoMockResponseFoundException;
@@ -57,6 +63,13 @@ class MockClient
      * Use MockClient::global() to register a global mock client
      */
     protected static ?MockClient $globalMockClient = null;
+
+    /**
+     * When true, the response cache plugin will not read or write the cache
+     * for requests using this mock client (for example, so fixture files are
+     * re-read from disk on each request during tests).
+     */
+    protected bool $withoutResponseCache = false;
 
     /**
      * Constructor
@@ -405,6 +418,26 @@ class MockClient
     }
 
     /**
+     * Disable the response cache while this mock client is in use.
+     *
+     * @return $this
+     */
+    public function withoutCache(): static
+    {
+        $this->withoutResponseCache = true;
+
+        return $this;
+    }
+
+    /**
+     * Whether the response cache plugin should bypass caching.
+     */
+    public function shouldBypassResponseCache(): bool
+    {
+        return $this->withoutResponseCache;
+    }
+
+    /**
      * Register a global mock client
      *
      * This will register a global mock client that is available throughout the
@@ -443,9 +476,15 @@ class MockClient
             return false;
         }
 
+        $firstParameterType = $this->getClosureFirstParameterType($closure);
+
         if (! is_null($index)) {
             $response = $this->getRecordedResponses()[$index];
             $request = $response->getPendingRequest()->getRequest();
+
+            if ($this->requestMatchesType($request, $firstParameterType) === false) {
+                return false;
+            }
 
             return $closure($request, $response);
         }
@@ -456,7 +495,13 @@ class MockClient
         $lastResponse = $this->getLastResponse();
 
         if ($lastResponse instanceof Response) {
-            $passed = $closure($lastResponse->getPendingRequest()->getRequest(), $lastResponse);
+            $lastRequest = $lastResponse->getPendingRequest()->getRequest();
+
+            $passed = false;
+
+            if ($this->requestMatchesType($lastRequest, $firstParameterType)) {
+                $passed = $closure($lastRequest, $lastResponse);
+            }
 
             if ($passed === true) {
                 return true;
@@ -469,6 +514,10 @@ class MockClient
         foreach ($this->getRecordedResponses() as $response) {
             $request = $response->getPendingRequest()->getRequest();
 
+            if ($this->requestMatchesType($request, $firstParameterType) === false) {
+                continue;
+            }
+
             $passed = $closure($request, $response);
 
             if ($passed === true) {
@@ -477,6 +526,67 @@ class MockClient
         }
 
         return false;
+    }
+
+    /**
+     * Get the first closure parameter type if one exists.
+     */
+    private function getClosureFirstParameterType(callable $closure): ?ReflectionType
+    {
+        $reflection = new ReflectionFunction(Closure::fromCallable($closure));
+        $parameters = $reflection->getParameters();
+
+        if ($parameters === []) {
+            return null;
+        }
+
+        return $parameters[0]->getType();
+    }
+
+    /**
+     * Determine if a request matches a closure first parameter type.
+     */
+    private function requestMatchesType(Request $request, ?ReflectionType $type): bool
+    {
+        if ($type === null) {
+            return true;
+        }
+
+        if ($type instanceof ReflectionNamedType) {
+            $typeName = $type->getName();
+
+            if ($typeName === 'mixed') {
+                return true;
+            }
+
+            if ($type->isBuiltin()) {
+                return $typeName === 'object';
+            }
+
+            return $request instanceof $typeName;
+        }
+
+        if ($type instanceof ReflectionUnionType) {
+            foreach ($type->getTypes() as $subType) {
+                if ($this->requestMatchesType($request, $subType)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if ($type instanceof ReflectionIntersectionType) {
+            foreach ($type->getTypes() as $subType) {
+                if ($this->requestMatchesType($request, $subType) === false) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return true;
     }
 
     /**

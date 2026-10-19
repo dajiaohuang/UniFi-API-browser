@@ -3,10 +3,10 @@
     "require": {
         "twig/twig": "^3.0",
         "kint-php/kint": "^5.0",
-        "art-of-wifi/unifi-api-client": "^2.0.0",
+        "art-of-wifi/unifi-api-client": "^2.4.0",
         "php": ">=8.1",
         "ext-curl": "*",
         "ext-json": "*",
-        "art-of-wifi/unifi-network-application-api-client": "^1.0"
+        "art-of-wifi/unifi-network-application-api-client": "^1.2.0"
     }
 }

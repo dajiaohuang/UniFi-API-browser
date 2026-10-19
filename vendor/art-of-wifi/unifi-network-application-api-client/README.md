@@ -20,11 +20,12 @@ client. For a richer set of features, we currently recommend using the [legacy U
 
 ## Features
 
-- Built on Saloon v3 for robust HTTP communication
+- Built on Saloon v4 for robust HTTP communication
 - Fluent interface with method chaining for elegant code
-- Full support for the official UniFi Network Application API (v10.1.84+)
+- Full support for the official UniFi Network Application API (v10.1.84+, verified against v10.6.106 and v11.0.89)
 - Comprehensive coverage of all API endpoints
-- Strongly typed using PHP 8.1+ features
+- Connects directly to a console or remotely through the Site Manager connector at `api.ui.com`
+- Strongly typed using PHP 8.2+ features
 - Easy to use for beginners, flexible for advanced users
 - Well-documented with inline PHPDoc for IDE auto-completion
 - PSR-4 autoloading
@@ -33,10 +34,28 @@ client. For a richer set of features, we currently recommend using the [legacy U
 
 ## Requirements
 
-- PHP 8.1 or higher
+- PHP 8.2 or higher
 - Composer
 - A UniFi OS Server or UniFi OS console with API key access to the Network Application
-- Network access to your UniFi Controller
+- Network access to your UniFi Controller, or remote access through the [Site Manager connector](#site-manager-connector-remote-access)
+
+
+## API Version Compatibility
+
+The official API documentation is published at [developer.ui.com](https://developer.ui.com/network/v10.6.106/gettingstarted).
+The version in the documentation URL is the UniFi Network Application version the API belongs to; the REST paths
+themselves stay under `/v1/...`. Newer Network Application versions add endpoints and fields over time, so some
+features require a minimum version on your console:
+
+| Feature | Minimum Network version |
+|---------|-------------------------|
+| All endpoints in this client except the ones listed below | 10.1.84 |
+| Switching endpoints (`switching()`) | 10.2.x |
+| WiFi `channel2gLockedTo6`, `dtimPeriod2gLockedTo3` (required), `dnsAssistanceConfiguration`, `handoffSuggestionsConfiguration`, Enhanced Open `encryption` | 10.6.106 |
+| Firewall policy `reportFlowEnabled` (create, update and patch) | 11.0.89 |
+| Device radio `txPowerMode`, `802.11ah` standard and `0.9` GHz frequency | 11.0.89 |
+
+Use `$apiClient->applicationInfo()->get()` to check which version your console runs.
 
 
 ## Installation
@@ -206,16 +225,49 @@ $apiClient->networks()->delete('network-uuid-here');
 // List all WiFi broadcasts (SSIDs)
 $wifiNetworks = $apiClient->wifiBroadcasts()->list();
 
-// Create a new WiFi network (requires complex nested structure - see examples)
-// Refer to examples/05-wifi-management.php for complete structure
-
-// Update WiFi settings
-$apiClient->wifiBroadcasts()->update('wifi-uuid', [
-    'name' => 'Updated WiFi Name'
+// Create a standard WPA2/WPA3 WiFi network
+$apiClient->wifiBroadcasts()->create([
+    'type' => 'STANDARD',                         // or 'IOT_OPTIMIZED'
+    'name' => 'My WiFi',
+    'enabled' => true,
+    'network' => ['type' => 'NATIVE'],            // or ['type' => 'SPECIFIC', 'networkId' => 'network-uuid']
+    'securityConfiguration' => [
+        'type' => 'WPA2_WPA3_PERSONAL',
+        'passphrase' => 'a-strong-passphrase',
+        'pmfMode' => 'OPTIONAL',
+        'wpa3FastRoamingEnabled' => false,
+        'saeConfiguration' => ['anticloggingThresholdSeconds' => 5, 'syncTimeSeconds' => 5],
+    ],
+    'broadcastingFrequenciesGHz' => [2.4, 5],     // numbers, not strings
+    'hideName' => false,
+    'clientIsolationEnabled' => false,
+    'multicastToUnicastConversionEnabled' => false,
+    'uapsdEnabled' => false,
+    'advertiseDeviceName' => false,
+    'arpProxyEnabled' => false,
+    'bssTransitionEnabled' => true,
+    'channel2gLockedTo6' => false,                // required as of Network 10.6.106
+    'dtimPeriod2gLockedTo3' => false,             // required as of Network 10.6.106
 ]);
 
 // Delete a WiFi network
 $apiClient->wifiBroadcasts()->delete('wifi-uuid-here');
+```
+
+Updating a WiFi broadcast uses `PUT`, so the body must contain all required fields (the same as for
+`create()`), not only the fields you want to change.
+
+Optional settings for `STANDARD` broadcasts added in Network 10.6:
+
+```php
+// DNS assistance: AUTO, or MANUAL with up to two failover DNS servers
+'dnsAssistanceConfiguration' => ['mode' => 'MANUAL', 'servers' => ['1.1.1.1', '8.8.8.8']],
+
+// Suggest low-signal clients to roam to a better AP (RSSI thresholds in dBm, null disables a band)
+'handoffSuggestionsConfiguration' => ['band5GHzRssiThreshold' => -70, 'band6GHzRssiThreshold' => -80],
+
+// Enhanced Open (OWE) for open networks
+'securityConfiguration' => ['type' => 'OPEN', 'encryption' => 'ENHANCED_OPEN'], // or ENHANCED_OPEN_WITH_TRANSITION
 ```
 
 ### Hotspot Vouchers
@@ -290,14 +342,27 @@ $policies = $apiClient->firewall()->listPolicies();
 $apiClient->firewall()->createPolicy([
     'name' => 'Block IoT to LAN',
     'enabled' => true,
-    'action' => 'BLOCK',
+    'action' => ['type' => 'BLOCK'],                    // ALLOW (requires 'allowReturnTraffic'), BLOCK or REJECT
     'source' => ['zoneId' => 'source-zone-uuid'],
     'destination' => ['zoneId' => 'destination-zone-uuid'],
+    'ipProtocolScope' => ['ipVersion' => 'IPV4_AND_IPV6'], // IPV4, IPV6 or IPV4_AND_IPV6
+    'loggingEnabled' => false,
 ]);
 
-// Partially update a firewall policy (PATCH - only send changed fields)
+// Patch a firewall policy (PATCH only accepts loggingEnabled, and reportFlowEnabled on Network 11.0+)
 $apiClient->firewall()->patchPolicy('policy-uuid', [
-    'enabled' => false
+    'loggingEnabled' => true,
+]);
+
+// Full update (PUT) - send all required fields, not just the changed ones
+$apiClient->firewall()->updatePolicy('policy-uuid', [
+    'name' => 'Block IoT to LAN',
+    'enabled' => false,
+    'action' => ['type' => 'BLOCK'],
+    'source' => ['zoneId' => 'source-zone-uuid'],
+    'destination' => ['zoneId' => 'destination-zone-uuid'],
+    'ipProtocolScope' => ['ipVersion' => 'IPV4_AND_IPV6'],
+    'loggingEnabled' => false,
 ]);
 
 // Get/update firewall policy ordering between two zones
@@ -314,15 +379,24 @@ $apiClient->firewall()->updatePolicyOrdering(
 // List ACL rules
 $rules = $apiClient->aclRules()->list();
 
-// Create an ACL rule (requires complex structure - see API docs)
+// Create an IPv4 ACL rule
 $apiClient->aclRules()->create([
-    'type' => 'IPV4',  // or 'MAC'
-    'name' => 'Block Social Media',
+    'type' => 'IPV4',                       // or 'MAC' (which requires 'networkIdFilter')
+    'name' => 'Block guest subnet to NAS',
     'enabled' => true,
-    'action' => 'BLOCK',  // or 'ALLOW'
-    'index' => 1000,
-    // ... additional filters required
+    'action' => 'BLOCK',                    // or 'ALLOW'
+    'sourceFilter' => [
+        'type' => 'IP_ADDRESSES_OR_SUBNETS', // or NETWORKS / PORTS
+        'ipAddressesOrSubnets' => ['192.168.50.0/24'],
+    ],
+    'destinationFilter' => [
+        'type' => 'IP_ADDRESSES_OR_SUBNETS',
+        'ipAddressesOrSubnets' => ['192.168.1.10'],
+        'portFilter' => [445],
+    ],
+    'protocolFilter' => ['TCP'],            // omit to apply to all protocols
 ]);
+// Note: the 'index' field is deprecated and has no effect - use updateOrdering() instead
 
 // Get/update ACL rule ordering
 $ordering = $apiClient->aclRules()->getOrdering();
@@ -340,8 +414,9 @@ $apiClient->aclRules()->updateOrdering([
 $policies = $apiClient->dnsPolicies()->list();
 
 // Create a DNS A record
+// Types: A_RECORD, AAAA_RECORD, CNAME_RECORD, MX_RECORD, TXT_RECORD, SRV_RECORD, FORWARD_DOMAIN
 $apiClient->dnsPolicies()->create([
-    'type' => 'A',
+    'type' => 'A_RECORD',
     'enabled' => true,
     'domain' => 'myapp.local',
     'ipv4Address' => '192.168.1.100',
@@ -350,21 +425,58 @@ $apiClient->dnsPolicies()->create([
 
 // Create a DNS CNAME record
 $apiClient->dnsPolicies()->create([
-    'type' => 'CNAME',
+    'type' => 'CNAME_RECORD',
     'enabled' => true,
     'domain' => 'alias.local',
     'targetDomain' => 'myapp.local',
     'ttlSeconds' => 3600,
 ]);
 
-// Update a DNS policy
+// Update a DNS policy (PUT) - send all required fields for the record type
 $apiClient->dnsPolicies()->update('dns-policy-uuid', [
+    'type' => 'A_RECORD',
     'enabled' => false,
+    'domain' => 'myapp.local',
     'ipv4Address' => '192.168.1.200',
+    'ttlSeconds' => 3600,
 ]);
 
 // Delete a DNS policy
 $apiClient->dnsPolicies()->delete('dns-policy-uuid');
+```
+
+### Switching (Switch Stacks, MC-LAG, LAGs)
+
+All switching endpoints are read-only.
+
+```php
+<?php
+
+use ArtOfWiFi\UnifiNetworkApplicationApi\Filters\Switching\LagFilter;
+use ArtOfWiFi\UnifiNetworkApplicationApi\Filters\Switching\SwitchStackFilter;
+
+// List switch stacks and get the details of one
+$stacks = $apiClient->switching()->listSwitchStacks();
+$stack = $apiClient->switching()->getSwitchStack('switch-stack-uuid');
+
+// Find the stack that contains a specific switch
+$stacks = $apiClient->switching()->listSwitchStacks(
+    filter: SwitchStackFilter::unitsMacAddress()->contains('94:2a:6f:26:c6:ca')
+);
+
+// List MC-LAG domains and get the details of one
+$domains = $apiClient->switching()->listMcLagDomains();
+$domain = $apiClient->switching()->getMcLagDomain('mc-lag-domain-uuid');
+
+// List LAGs (type is LOCAL, SWITCH_STACK or MULTI_CHASSIS)
+$lags = $apiClient->switching()->listLags();
+$localLags = $apiClient->switching()->listLags(filter: LagFilter::localLags());
+
+// Find LAGs that include port 5 on any member
+$lags = $apiClient->switching()->listLags(filter: LagFilter::membersPortIdxs()->contains(5));
+
+// Get the details of a single LAG
+$lag = $apiClient->switching()->getLag('lag-uuid');
 ```
 
 
@@ -452,9 +564,19 @@ $clients = $apiClient->clients()->list(
     filter: ClientFilter::ipAddress()->isNotNull()
 );
 
-// Set operations - devices with WiFi 6
+// Set operations - devices with the access point feature
 $devices = $apiClient->devices()->listAdopted(
-    filter: DeviceFilter::features()->contains('wifi6')
+    filter: DeviceFilter::features()->contains('accessPoint')
+);
+
+// UUID values - passed as plain strings
+$devices = $apiClient->devices()->listAdopted(
+    filter: DeviceFilter::id()->in(['550e8400-e29b-41d4-a716-446655440000', '6ba7b810-9dad-11d1-80b4-00c04fd430c8'])
+);
+
+// Timestamp values - pass a DateTimeInterface
+$recentClients = $apiClient->clients()->list(
+    filter: ClientFilter::connectedAt()->greaterThan(new DateTimeImmutable('-1 hour'))
 );
 
 // Preset filters for common use cases
@@ -509,6 +631,25 @@ $countries = $apiClient->supportingResources()->listCountries(
 - `VpnServersFilter` - For VPN server filtering
 - `RadiusProfilesFilter` - For RADIUS profile filtering
 - `DeviceTagsFilter` - For device tag filtering
+- `AclRuleFilter` - For ACL rule filtering (incl. source/destination filter properties)
+- `WifiBroadcastFilter` - For WiFi broadcast (SSID) filtering
+- `VoucherFilter` - For hotspot voucher filtering (also usable for bulk voucher deletion)
+- `FirewallZoneFilter` - For firewall zone filtering
+- `TrafficMatchingListFilter` - For traffic matching list filtering
+- `SwitchStackFilter`, `McLagDomainFilter`, `LagFilter` - For switching filtering
+
+**Value Formatting:**
+
+The filter builders format values the way the API expects them, so you can pass native PHP values:
+
+| PHP value | Sent to the API as | Example |
+|-----------|--------------------|---------|
+| String | Single-quoted, `'` escaped as `''` | `name.eq('Erik''s Lab')` |
+| UUID string | Unquoted | `id.eq(550e8400-e29b-41d4-a716-446655440000)` |
+| `int` / `float` | Unquoted | `vlanId.eq(10)`, `broadcastingFrequenciesGHz.contains(2.4)` |
+| `bool` | `true` / `false` | `enabled.eq(true)` |
+| `DateTimeInterface` | Unquoted ISO 8601 in UTC | `connectedAt.gt(2026-01-29T12:39:11Z)` |
+| Backed enum | Its value, formatted as above | `type.eq('WIRELESS')` |
 
 **Available Enums:**
 - `ClientType` - WIRED, WIRELESS, VPN, TELEPORT
@@ -594,23 +735,120 @@ According to the official API specification, the following properties are filter
 
 According to the official API specification, the following properties are filterable for DNS policies:
 
-- `type` (STRING) - `eq`, `ne`, `in`, `notIn` (Valid values: `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `SRV`, `FORWARD_DOMAIN`)
+- `type` (STRING) - `eq`, `ne`, `in`, `notIn` (Valid values: `A_RECORD`, `AAAA_RECORD`, `CNAME_RECORD`, `MX_RECORD`, `TXT_RECORD`, `SRV_RECORD`, `FORWARD_DOMAIN`)
 - `id` (UUID) - `eq`, `ne`, `in`, `notIn`
 - `enabled` (BOOLEAN) - `eq`, `ne`
 - `domain` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
-- `ipv4Address` (STRING) - `eq`, `ne`, `in`, `notIn`
-- `ipv6Address` (STRING) - `eq`, `ne`, `in`, `notIn`
+- `ipv4Address` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
+- `ipv6Address` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
 - `targetDomain` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
 - `mailServerDomain` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
 - `text` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
 - `serverDomain` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
-- `ipAddress` (STRING) - `eq`, `ne`, `in`, `notIn`
-- `ttlSeconds` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`
-- `priority` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `ipAddress` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
+- `ttlSeconds` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `in`, `notIn`
+- `priority` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `in`, `notIn`
 - `service` (STRING) - `eq`, `ne`, `in`, `notIn`
 - `protocol` (STRING) - `eq`, `ne`, `in`, `notIn`
-- `port` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`
-- `weight` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `port` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `in`, `notIn`
+- `weight` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `in`, `notIn`
+
+#### ACL Rule Filterable Properties
+
+According to the official API specification, the following properties are filterable for ACL rules (`AclRuleFilter`):
+
+- `type` (STRING) - `eq`, `ne`, `in`, `notIn` (Valid values: `IPV4`, `MAC`)
+- `id` (UUID) - `eq`, `ne`, `in`, `notIn`
+- `enabled` (BOOLEAN) - `eq`, `ne`
+- `name` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
+- `description` (STRING) - `isNull`, `isNotNull`, `eq`, `ne`, `in`, `notIn`, `like`
+- `action` (STRING) - `eq`, `ne`, `in`, `notIn` (Valid values: `ALLOW`, `BLOCK`)
+- `index` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `in`, `notIn`
+- `protocolFilter` (SET(STRING)) - `isNull`, `isNotNull`, `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `networkId` (UUID) - `isNull`, `isNotNull`, `eq`, `ne`, `in`, `notIn`
+- `enforcingDeviceFilter.deviceIds` (SET(UUID)) - `isNull`, `isNotNull`, `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `metadata.origin` (STRING) - `eq`, `ne`, `in`, `notIn`
+- `sourceFilter.type` / `destinationFilter.type` (STRING) - `isNull`, `isNotNull`, `eq`, `ne`, `in`, `notIn`
+- `sourceFilter.ipAddressesOrSubnets` / `destinationFilter.ipAddressesOrSubnets` (SET(STRING)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `sourceFilter.portFilter` / `destinationFilter.portFilter` (SET(INTEGER)) - `isNull`, `isNotNull`, `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `sourceFilter.networkIds` / `destinationFilter.networkIds` (SET(UUID)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `sourceFilter.macAddresses` / `destinationFilter.macAddresses` (SET(STRING)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `sourceFilter.prefixLength` / `destinationFilter.prefixLength` (INTEGER) - `isNull`, `isNotNull`, `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `in`, `notIn`
+
+#### WiFi Broadcast Filterable Properties
+
+According to the official API specification, the following properties are filterable for WiFi broadcasts (`WifiBroadcastFilter`):
+
+- `type` (STRING) - `eq`, `ne`, `in`, `notIn` (Valid values: `STANDARD`, `IOT_OPTIMIZED`)
+- `id` (UUID) - `eq`, `ne`, `in`, `notIn`
+- `enabled` (BOOLEAN) - `eq`, `ne`
+- `name` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
+- `broadcastingFrequenciesGHz` (SET(DECIMAL)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `metadata.origin` (STRING) - `eq`, `ne`, `in`, `notIn`
+- `network.type` (STRING) - `eq`, `ne`, `in`, `notIn`, `isNull`, `isNotNull`
+- `network.networkId` (UUID) - `eq`, `ne`, `in`, `notIn`
+- `securityConfiguration.type` (STRING) - `eq`, `ne`, `in`, `notIn`
+- `broadcastingDeviceFilter.type` (STRING) - `eq`, `ne`, `in`, `notIn`, `isNull`, `isNotNull`
+- `broadcastingDeviceFilter.deviceIds` (SET(UUID)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `broadcastingDeviceFilter.deviceTagIds` (SET(UUID)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `hotspotConfiguration.type` (STRING) - `eq`, `ne`, `in`, `notIn`
+
+#### Hotspot Voucher Filterable Properties
+
+According to the official API specification, the following properties are filterable for vouchers (`VoucherFilter`), both when listing and when deleting vouchers:
+
+- `id` (UUID) - `eq`, `ne`, `in`, `notIn`
+- `createdAt` (TIMESTAMP) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `name` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
+- `code` (STRING) - `eq`, `ne`, `in`, `notIn`
+- `authorizedGuestLimit` (INTEGER) - `isNull`, `isNotNull`, `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `authorizedGuestCount` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `activatedAt` (TIMESTAMP) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `expiresAt` (TIMESTAMP) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `expired` (BOOLEAN) - `eq`, `ne`
+- `timeLimitMinutes` (INTEGER) - `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `dataUsageLimitMBytes` (INTEGER) - `isNull`, `isNotNull`, `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `rxRateLimitKbps` (INTEGER) - `isNull`, `isNotNull`, `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+- `txRateLimitKbps` (INTEGER) - `isNull`, `isNotNull`, `eq`, `ne`, `gt`, `ge`, `lt`, `le`
+
+#### Firewall Zone Filterable Properties
+
+According to the official API specification, the following properties are filterable for firewall zones (`FirewallZoneFilter`):
+
+- `id` (UUID) - `eq`, `ne`, `in`, `notIn`
+- `name` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
+- `metadata.origin` (STRING) - `eq`, `ne`, `in`, `notIn`
+- `metadata.configurable` (BOOLEAN) - `eq`, `ne`, `isNull`, `isNotNull`
+
+> **Deprecated:** `FirewallZoneFilter::networkIds()`, `FirewallZoneFilter::emptyZones()` and
+> `TrafficMatchingListFilter::type()` target properties the API does not accept as filters (it responds with
+> `400 api.request.invalid-filter`). They are kept for backward compatibility and will be removed in 2.0.
+
+#### Switching Filterable Properties
+
+According to the official API specification, the following properties are filterable:
+
+**Switch stacks** (`SwitchStackFilter`):
+- `id` (UUID) - `eq`, `ne`, `in`, `notIn`
+- `name` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
+- `units.id` (SET(INTEGER)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `units.macAddress` (SET(STRING)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `metadata.origin` (STRING) - `eq`, `ne`, `in`, `notIn`
+
+**MC-LAG domains** (`McLagDomainFilter`):
+- `id` (UUID) - `eq`, `ne`, `in`, `notIn`
+- `name` (STRING) - `eq`, `ne`, `in`, `notIn`, `like`
+- `peers.deviceId` (SET(UUID)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `metadata.origin` (STRING) - `eq`, `ne`, `in`, `notIn`
+
+**LAGs** (`LagFilter`):
+- `id` (UUID) - `eq`, `ne`, `in`, `notIn`
+- `type` (STRING) - `eq`, `ne`, `in`, `notIn` (Valid values: `LOCAL`, `SWITCH_STACK`, `MULTI_CHASSIS`)
+- `switchStackId` (UUID) - `eq`, `ne`, `in`, `notIn`, `isNull`, `isNotNull`
+- `mcLagDomainId` (UUID) - `eq`, `ne`, `in`, `notIn`, `isNull`, `isNotNull`
+- `members.deviceId` (SET(UUID)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `members.portIdxs` (SET(INTEGER)) - `contains`, `containsAny`, `containsAll`, `containsExactly`
+- `metadata.origin` (STRING) - `eq`, `ne`, `in`, `notIn`
 
 For full filtering syntax documentation, see the Network Application API documentation in your controller.
 
@@ -695,30 +933,61 @@ echo $device['ipAddress'];      // ✓ Correct
 
 ### Error Handling
 
-Handle API errors gracefully using try-catch blocks:
+By default, a failed request (HTTP 4xx/5xx) is **returned** like any other response, not thrown. Check the
+response, or call `throw()` to turn it into an exception:
 
 ```php
 <?php
 
-use Saloon\Exceptions\Request\RequestException;
+$response = $apiClient->devices()->get('550e8400-e29b-41d4-a716-446655440000');
+
+if ($response->failed()) {
+    // The body follows the API's error format
+    echo $response->status();           // 404
+    echo $response->json('code');       // api.resource-not-found
+    echo $response->json('message');    // Requested resource does not exist
+    echo $response->json('requestId');  // useful when looking up 500 errors in the controller logs
+}
+
+// Or throw a ClientException (4xx) / ServerException (5xx) for a failed response
+$device = $response->throw()->json();
+```
+
+To have **every** failed response throw, enable `throwOnErrors` (opt-in, available since 1.2.0):
+
+```php
+<?php
+
 use Saloon\Exceptions\Request\ClientException;
+use Saloon\Exceptions\Request\FatalRequestException;
 use Saloon\Exceptions\Request\ServerException;
+use Saloon\Exceptions\Request\Statuses\NotFoundException;
+
+$apiClient = new UnifiClient('https://192.168.1.1', 'your-api-key', throwOnErrors: true);
+// or on an existing client: $apiClient->throwOnErrors();
 
 try {
-    $response = $apiClient->devices()->get('invalid-uuid-here');
-    $device = $response->json();
+    $device = $apiClient->devices()->get('550e8400-e29b-41d4-a716-446655440000')->json();
+} catch (NotFoundException $e) {
+    // Specific 4xx subclasses exist, e.g. UnauthorizedException, ForbiddenException, TooManyRequestsException
+    echo $e->getResponse()->json('message');
 } catch (ClientException $e) {
-    // 4xx errors (client errors like 404 Not Found)
-    echo "Client error: " . $e->getMessage();
-    echo "Status code: " . $e->getResponse()->status();
+    // Any other 4xx error
+    echo 'Client error: ' . $e->getResponse()->status();
 } catch (ServerException $e) {
-    // 5xx errors (server errors)
-    echo "Server error: " . $e->getMessage();
-} catch (RequestException $e) {
-    // General request errors
-    echo "Request failed: " . $e->getMessage();
+    // 5xx errors
+    echo 'Server error: ' . $e->getResponse()->status();
+} catch (FatalRequestException $e) {
+    // Network issues, timeouts, SSL errors
+    echo 'Connection failed: ' . $e->getMessage();
 }
 ```
+
+Regardless of this setting:
+- **Network problems** (connection refused, DNS failures, timeouts, SSL errors) always throw a `FatalRequestException`.
+- A missing site ID throws a `RuntimeException` **before** any request is sent.
+- An invalid API key is rejected by UniFi OS itself with `401` and a different body (`{"error": {"code": 401, ...}}`)
+  than the API's own error format.
 
 ### SSL Certificate Verification
 
@@ -746,6 +1015,38 @@ $apiClient = new UnifiClient(
 );
 ```
 
+### Site Manager Connector (Remote Access)
+
+If there is no direct network path to your console, you can reach its Network API through the
+[Site Manager API](https://developer.ui.com/site-manager/v1.0.0/gettingstarted) connector at `api.ui.com`. Requests
+are proxied by Ubiquiti's cloud to the console, without a VPN or port forwarding:
+
+```php
+<?php
+
+$apiClient = UnifiClient::connectViaSiteManager(
+    consoleId: 'your-console-id',
+    apiKey: 'your-site-manager-api-key'
+);
+
+// Use the client exactly like a direct connection
+$sites = $apiClient->sites()->list();
+$apiClient->setSiteId('your-site-uuid');
+$devices = $apiClient->devices()->listAdopted();
+```
+
+Requests are sent to `https://api.ui.com/v1/connector/consoles/{consoleId}/network/integration/...`, which the
+connector forwards to `/proxy/network/integration/...` on the console.
+
+- **API key:** use a Site Manager API key generated at [unifi.ui.com](https://unifi.ui.com), not a key from the
+  Network Application's Integrations page. Non-organization keys can only reach consoles owned by the key's owner;
+  organization keys can reach any console in the organization.
+- **Console ID:** the host ID shown in the console URL on unifi.ui.com (`https://unifi.ui.com/consoles/{consoleId}/...`).
+- **Console firmware:** UniFi OS 5.0.3 or later, and the console must be online and connected to UI.com.
+- **SSL:** always verified, since `api.ui.com` uses a publicly trusted certificate.
+- **Limits:** 100 requests per minute per console, a 25 second timeout per request and a 10 MB response size limit,
+  so use pagination with a sensible `limit` for large lists. Expect extra latency compared to direct access.
+
 ### Version Information
 
 You can retrieve the client library version at runtime, which is useful for troubleshooting and logging:
@@ -753,10 +1054,10 @@ You can retrieve the client library version at runtime, which is useful for trou
 ```php
 <?php
 
-echo $apiClient->getVersion(); // e.g., "1.0.0"
+echo $apiClient->getVersion(); // e.g., "1.2.0"
 ```
 
-The version is also sent with every API request as a `User-Agent` header (`unifi-api-client-php/1.0.0`), which can help
+The version is also sent with every API request as a `User-Agent` header (`unifi-api-client-php/1.2.0`), which can help
 when debugging API issues in controller logs. The version constant is also available directly
 via `UnifiConnector::VERSION`.
 
@@ -778,6 +1079,7 @@ The client provides access to the following resources:
 | `aclRules()` | Access Control List (ACL) rule management, including rule ordering |
 | `dnsPolicies()` | DNS policy management (A, AAAA, CNAME, MX, TXT, SRV, forward domains) |
 | `trafficMatchingLists()` | Port and IP address lists for firewall policies |
+| `switching()` | Read-only switching topology: switch stacks, MC-LAG domains and LAGs |
 | `supportingResources()` | Reference data (WAN interfaces, DPI categories, countries, RADIUS profiles, device tags) |
 
 
@@ -793,11 +1095,44 @@ See the [`examples/`](examples/) directory for complete working examples:
 - [Error Handling](examples/06-error-handling.php) - Proper exception handling
 - [Firewall Policies & DNS Policies](examples/10-firewall-dns-policies.php) - Firewall policies, ACL ordering, and DNS policies
 
+## Upgrading to 1.2.0
+
+1.2.0 is backward compatible for normal use: no public methods were removed or renamed, and the default
+error handling is unchanged. A few behaviours changed because they never worked against the API:
+
+| Change | Before | Now |
+|--------|--------|-----|
+| UUID values in filters | quoted: `id.eq('550e8400-…')`, rejected by the API | unquoted: `id.eq(550e8400-…)` |
+| Single quotes in filter values | escaped as `\'`, rejected by the API | escaped as `''` (`'Erik''s Lab'`) |
+| `DnsPolicyFilter` presets (`aRecords()`, …) | filtered on `A`, `CNAME`, …, never matched | filter on `A_RECORD`, `CNAME_RECORD`, … |
+| Timestamp filters | only possible as raw strings | pass a `DateTimeInterface` to the builders |
+
+If your code compared filter strings produced by the builders (e.g. in your own tests), update the expected
+strings for UUID values and single quotes.
+
+**Deprecated** (still available, removed in 2.0): `FirewallZoneFilter::networkIds()`,
+`FirewallZoneFilter::emptyZones()` and `TrafficMatchingListFilter::type()`. The API rejects these properties as
+filters (`400 api.request.invalid-filter`), so any code using them did not work before either.
+
+**Wider parameter types:** the `Filter` comparison methods (`equals()`, `greaterThan()`, `contains()`, …) accept
+`float` and `DateTimeInterface`, and `sites()->list()`, `devices()->listPending()` and `hotspot()->deleteVouchers()`
+accept Filter objects. This only affects you if you **extend** these classes and override those methods: widen
+the parameter types in your overrides accordingly.
+
+**Error handling:** failed responses (4xx/5xx) were always returned rather than thrown, even though earlier
+documentation said otherwise. That behaviour is unchanged; to get exceptions, enable the new `throwOnErrors`
+option (see [Error Handling](#error-handling)).
+
+**Network Application 10.6.106+:** the API specification marks `channel2gLockedTo6` and `dtimPeriod2gLockedTo3`
+as required for WiFi broadcast create/update requests on these versions. Add both fields (e.g. `false`) to existing
+create/update payloads.
+
+
 ## Migrating from the Legacy Client
 
 If you're migrating from the [legacy UniFi API client](https://github.com/Art-of-WiFi/UniFi-API-client), this new Saloon-based client offers:
 
-- Modern PHP 8.1+ syntax with typed properties
+- Modern PHP 8.2+ syntax with typed properties
 - Fluent interface for more readable code
 - Better error handling with exceptions
 - Comprehensive IDE support through PHPDoc
